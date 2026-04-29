@@ -1,51 +1,49 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+import { Toaster } from "sonner";
+import Layout from "./components/Layout";
+import KeysModal from "./components/KeysModal";
+import Dashboard from "./pages/Dashboard";
+import BrandNew from "./pages/BrandNew";
+import BrandDetail from "./pages/BrandDetail";
+import { keysStore } from "./lib/api";
 
 function App() {
+  const [keysOpen, setKeysOpen] = useState(false);
+
+  useEffect(() => {
+    if (!keysStore.has()) setKeysOpen(true);
+  }, []);
+
+  const open = () => setKeysOpen(true);
+
   return (
     <div className="App">
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
+        <Layout onOpenKeys={open}>
+          <Routes>
+            <Route path="/" element={<Dashboard onOpenKeys={open} />} />
+            <Route path="/brands/new" element={<BrandNew onOpenKeys={open} />} />
+            <Route path="/brands/:id" element={<BrandDetail onOpenKeys={open} />} />
+          </Routes>
+        </Layout>
+        <KeysModal open={keysOpen} onClose={() => setKeysOpen(false)} />
+        <Toaster
+          position="bottom-right"
+          toastOptions={{
+            style: {
+              borderRadius: 0,
+              border: "1px solid #000",
+              background: "#fff",
+              color: "#000",
+              fontFamily: "JetBrains Mono, monospace",
+              fontSize: "12px",
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+            },
+          }}
+        />
       </BrowserRouter>
     </div>
   );
