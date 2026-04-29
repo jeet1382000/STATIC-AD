@@ -1,0 +1,93 @@
+{
+  "theme": "Light",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "brand": {
+    "name": "Ads Studio",
+    "domain": "Creative Tool / Studio Application",
+    "aesthetic": "Magazine-grade editorial, Swiss design, Brutalist minimal, confident, raw structure. Pentagram / Linear inspired."
+  },
+  "colors": {
+    "base": {
+      "background": "#FFFFFF",
+      "surface": "#F7F7F7",
+      "foreground": "#0A0A0A",
+      "border": "#E5E5E5"
+    },
+    "brand": {
+      "primary": "#0A0A0A",
+      "primary_foreground": "#FFFFFF",
+      "accent": "#E52514",
+      "accent_foreground": "#FFFFFF"
+    },
+    "states": {
+      "hover_bg": "#F0F0F0",
+      "focus_ring": "#E52514",
+      "muted_text": "#737373"
+    }
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Cabinet Grotesk",
+      "body": "IBM Plex Sans",
+      "mono": "JetBrains Mono"
+    },
+    "rules": {
+      "h1": "text-5xl lg:text-6xl font-black tracking-tighter leading-none",
+      "h2": "text-3xl lg:text-4xl font-bold tracking-tight leading-tight",
+      "h3": "text-xl lg:text-2xl font-semibold tracking-tight",
+      "body": "text-base font-normal leading-relaxed text-foreground",
+      "labels": "text-xs font-medium uppercase tracking-[0.2em] font-mono text-muted_text"
+    }
+  },
+  "spacing_and_layout": {
+    "system": "Tailwind generously spaced: p-8, p-12, p-24.",
+    "grid": "Bento 'Control Room' grid (strict, dense, functional). grid-cols-1 md:grid-cols-4 lg:grid-cols-12. Asymmetry preferred for marketing moments, strict columns for dashboards.",
+    "corners": "rounded-none",
+    "containers": "max-w-[1440px] mx-auto px-6 md:px-12",
+    "alignment": "Strict left-alignment. No 'center-everything'. Optical alignment for icons."
+  },
+  "surfaces_and_microthemes": {
+    "global": "Flat, sharp edges, no soft drop-shadows. Use 1px solid borders to define structure (border-border).",
+    "cards": "bg-white border border-border p-8. Hover: border-black transition-colors.",
+    "modals": "Solid white background, strict black border, brutalist backdrop (bg-black/20 backdrop-blur-sm).",
+    "buttons": "Rectangular (rounded-none). Primary: bg-black text-white hover:bg-gray-900. Accent/CTA: bg-[#E52514] text-white hover:bg-red-700."
+  },
+  "components_strategy": {
+    "workspace_dashboard": "Grid of created brand projects. Use strict tabular layouts or large bento cards. Empty state: Massive typography and minimal abstract editorial image.",
+    "drop_url_input": "Massive full-width input. font-mono, text-2xl or 3xl. border-b-2 border-black, no side/top borders. Focus: border-[#E52514] and zero outline. Add an icon indicating 'Enter' to submit.",
+    "wizard_3_step": "Full-screen takeover or massive modal. Large counter (1/3) in font-mono. Step content uses large headings.",
+    "brand_identity_card": "A beautiful artifact. Shows color swatches in stark geometric blocks, font pairings dynamically, and tone descriptors in mono tags.",
+    "ad_creatives_grid": "15 images generated. 3-column or 4-column masonry or strict square grid. gap-px (1px grid lines between images) to look like a raw contact sheet.",
+    "byok_modal": "Settings panel for API keys. Standard Shadcn inputs but with rounded-none and 1px sharp borders. Clear 'Test' button."
+  },
+  "interactions_and_motion": {
+    "hover": "Explicit text and border color changes. E.g., hover:border-black, hover:text-black.",
+    "transitions": "Fast, mechanical. duration-150 ease-out.",
+    "loaders": "ASCII art loaders or rapid mono-text scrambling. No generic spinners."
+  },
+  "image_urls": [
+    {
+      "category": "empty_state_editorial",
+      "url": "https://images.unsplash.com/photo-1629922944655-a4c0ae9e07f1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NjV8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwZWRpdG9yaWFsJTIwZmFzaGlvbiUyMHBob3RvZ3JhcGh5fGVufDB8fHx8MTc3NzQ0MTkxNXww&ixlib=rb-4.1.0&q=85",
+      "description": "Minimalist editorial photo for empty workspace inspiration."
+    },
+    {
+      "category": "ad_grid_placeholder_1",
+      "url": "https://images.unsplash.com/photo-1775737804848-171091b7337c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1Mjh8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjB0eXBvZ3JhcGh5JTIwcG9zdGVyfGVufDB8fHx8MTc3NzQ0MTkxNXww&ixlib=rb-4.1.0&q=85",
+      "description": "Modern typography poster as a generated ad fallback."
+    },
+    {
+      "category": "ad_grid_placeholder_2",
+      "url": "https://images.pexels.com/photos/5767377/pexels-photo-5767377.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Minimalistic Black Friday poster fallback."
+    }
+  ],
+  "technical_rules": {
+    "testing": "All interactive and key informational elements MUST include a data-testid attribute.",
+    "testing_format": "kebab-case, role-based. E.g., data-testid='url-input-field', data-testid='wizard-next-button'.",
+    "shadcn": "Strip ALL border-radius from Shadcn components. Force 1px borders everywhere. Override card padding to p-8 or p-12.",
+    "storage": "Keys in localStorage. Brands/Ads in MongoDB.",
+    "icons": "lucide-react with stroke-width 1.5 for a sharp, technical look."
+  },
+  "instructions_to_main_agent": "Build a strict, magazine-grade creative tool. Avoid all 'SaaS' cliches (no soft shadows, no rounded corners, no gradients). Everything should feel like a printed layout or a high-end architect's blueprint. Use pure white, deep black, and sharp red for accents. Implement the BYOK modal first to allow testing the Anthropic/Fal APIs. Build the dashboard next, followed by the wizard and generation pipeline."
+}
