@@ -42,4 +42,8 @@ export const api = {
       timeout: 240000,
     }),
   listRuns: (id) => axios.get(`${API}/brands/${id}/runs`),
+
+  listTemplates: () => axios.get(`${API}/templates`),
+  patchTemplate: (id, patch) => axios.patch(`${API}/templates/${id}`, patch),
+  resetTemplates: () => axios.post(`${API}/templates/reset`),
 };

@@ -100,6 +100,52 @@ class AdRun(BaseModel):
     status: str = "running"  # running | done | failed
 
 
+class Template(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    number: int
+    name: str
+    aspect: str           # 1:1 | 4:5 | 9:16 | 16:9 | 4:3
+    needs_product: bool
+    category: str
+    scaffold: str         # raw prompt scaffold for Claude
+    enabled: bool = True
+
+
+SEED_TEMPLATES: List[dict] = [
+    {"number": 1, "name": "Headline Ad", "aspect": "4:5", "needs_product": True, "category": "headline", "enabled": False,
+     "scaffold": "A bold typographic headline ad. The product is hero-centered against a clean color-blocked background drawn from the brand palette. Strong sans-serif headline overlay (do not render text in the image), shallow depth of field, studio lighting."},
+    {"number": 2, "name": "Offer Promotion", "aspect": "1:1", "needs_product": True, "category": "offer", "enabled": False,
+     "scaffold": "A promotional sale ad with a starburst/badge composition. Product front and center, vibrant accent color on a clean stage. Festive, urgent, high contrast."},
+    {"number": 3, "name": "Testimonial Card", "aspect": "4:5", "needs_product": False, "category": "social_proof", "enabled": True,
+     "scaffold": "A quote-card style ad: a candid lifestyle portrait with soft natural light, framed as a testimonial graphic. Warm, intimate, magazine-editorial."},
+    {"number": 4, "name": "Feature Callout", "aspect": "4:5", "needs_product": True, "category": "product_feature", "enabled": True,
+     "scaffold": "Product hero with visible feature callouts (numbered annotations conceptually, no rendered text). Clean infographic feel, soft drop shadows, isolated background."},
+    {"number": 5, "name": "Us vs Them Comparison", "aspect": "1:1", "needs_product": True, "category": "comparison", "enabled": True,
+     "scaffold": "Split-frame composition: the brand product on one side rendered with vibrant brand palette and lighting, a generic alternative on the other side rendered flat and muted. Strong visual contrast."},
+    {"number": 6, "name": "Before and After UGC", "aspect": "9:16", "needs_product": False, "category": "ugc", "enabled": True,
+     "scaffold": "Mobile-shot before/after diptych. Authentic UGC feel: front-camera framing, natural light, slightly imperfect. Vertical 9:16."},
+    {"number": 7, "name": "Negative Marketing Bait-and-Switch", "aspect": "4:5", "needs_product": True, "category": "provocation", "enabled": True,
+     "scaffold": "A provocative editorial scene that visually subverts expectations. Bold composition, high contrast, the product appears as the punchline of the visual joke."},
+    {"number": 8, "name": "Press Editorial Layout", "aspect": "1:1", "needs_product": True, "category": "press", "enabled": True,
+     "scaffold": "A faux magazine spread: tasteful editorial photography of the product alongside a column-style typographic frame (no rendered text). Newsprint texture, classic serif vibe."},
+    {"number": 9, "name": "Review Card", "aspect": "1:1", "needs_product": False, "category": "social_proof", "enabled": True,
+     "scaffold": "A 5-star review card visual: clean card composition with abstract star motifs, brand palette, friendly avatar portrait in a circle frame."},
+    {"number": 10, "name": "Stat Surround Callout Radial", "aspect": "1:1", "needs_product": True, "category": "proof", "enabled": True,
+     "scaffold": "Product centered with radial callouts arranged around it (visual rays/arcs only, no rendered numbers). Infographic energy, brand-colored accents, clean studio backdrop."},
+    {"number": 11, "name": "Manifesto Ad", "aspect": "4:5", "needs_product": False, "category": "brand_voice", "enabled": True,
+     "scaffold": "An evocative landscape or symbolic still-life that embodies the brand's worldview. Cinematic, painterly, more art than ad. Brand palette restrained."},
+    {"number": 12, "name": "Faux iPhone Screenshot", "aspect": "9:16", "needs_product": False, "category": "native_ugc", "enabled": True,
+     "scaffold": "A vertical phone-screen feel: photograph staged as if a candid social post — slightly tilted, shadow of fingers, app-like UI suggestion (no rendered text)."},
+    {"number": 13, "name": "Post-it Note Style", "aspect": "1:1", "needs_product": False, "category": "handwritten", "enabled": True,
+     "scaffold": "A bright sticky-note pinned/stuck on a wall or surface. Hand-drawn doodles around it. Cheery, warm, low-fi."},
+    {"number": 14, "name": "Lifestyle UGC Selfie", "aspect": "9:16", "needs_product": True, "category": "ugc", "enabled": True,
+     "scaffold": "A selfie-style lifestyle shot of a real-feeling person holding the product. Natural daylight, slight imperfection, vertical phone frame."},
+    {"number": 15, "name": "Ingredient Hero / What's Inside", "aspect": "4:5", "needs_product": True, "category": "ingredient", "enabled": True,
+     "scaffold": "Exploded-view of product surrounded by its key raw ingredients (botanicals, grains, powders). Top-down studio light, soft shadows, painterly."},
+]
+
+
 # =============== Helpers ===============
 
 def _require_anthropic_key(x_anthropic_key: Optional[str]) -> str:
@@ -345,15 +391,47 @@ async def generate_creatives(
         if brand.product_images else "Reference photos: none."
     )
 
-    system = (
-        "You are a world-class art director. Write 15 distinct, vivid, production-ready "
-        "image-generation prompts for static social ad creatives. Every prompt must be a "
-        "single paragraph (40-80 words), reference the brand's palette, photography style, "
-        "and tone, and describe a concrete scene with subject, composition, lighting, and mood. "
-        "Avoid text overlays in the image. Vary scenes drastically across the 15. "
-        "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]}."
-    )
-    user = f"""Brand: {brand.name}
+    # Enabled templates drive prompt generation. Fallback: free-form 15.
+    await _seed_templates_if_empty()
+    tpl_docs = await db.templates.find({"enabled": True}, {"_id": 0}).sort("number", 1).to_list(20)
+    enabled = [Template(**d) for d in tpl_docs][:15]
+
+    if enabled:
+        templates_block = "\n".join(
+            f"  №{t.number:02d} [{t.aspect} · {t.category}{' · needs product' if t.needs_product else ''}] "
+            f"{t.name}: {t.scaffold}"
+            for t in enabled
+        )
+        system = (
+            "You are a world-class art director. For each provided template scaffold, write ONE vivid, "
+            "production-ready image-generation prompt (40-80 words, single paragraph) that adapts the scaffold "
+            "to the brand's palette, photography style, and tone. Describe a concrete scene: subject, composition, "
+            "lighting, mood. Avoid any rendered text in the image. "
+            "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]} preserving the order of templates."
+        )
+        user = f"""Brand: {brand.name}
+Product: {brand.product_name or "(brand-level campaign)"}
+{angle_line}
+{photos_line}
+
+Brand identity:
+{identity_json}
+
+Templates ({len(enabled)}):
+{templates_block}
+
+Return exactly {len(enabled)} prompts, in the same order as the templates above."""
+        target_count = len(enabled)
+    else:
+        system = (
+            "You are a world-class art director. Write 15 distinct, vivid, production-ready "
+            "image-generation prompts for static social ad creatives. Every prompt must be a "
+            "single paragraph (40-80 words), reference the brand's palette, photography style, "
+            "and tone, and describe a concrete scene with subject, composition, lighting, and mood. "
+            "Avoid text overlays in the image. Vary scenes drastically across the 15. "
+            "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]}."
+        )
+        user = f"""Brand: {brand.name}
 Product: {brand.product_name or "(brand-level campaign)"}
 {angle_line}
 {photos_line}
@@ -362,10 +440,11 @@ Brand identity:
 {identity_json}
 
 Return 15 prompts."""
+        target_count = 15
     raw = await _claude_call(a_key, system, user, max_tokens=4000)
     try:
         prompts = _extract_json(raw).get("prompts", [])
-        prompts = [p.strip() for p in prompts if isinstance(p, str) and p.strip()][:15]
+        prompts = [p.strip() for p in prompts if isinstance(p, str) and p.strip()][:target_count]
     except Exception as e:
         logger.error("Prompts parse failed: %s | raw=%s", e, raw[:300])
         raise HTTPException(status_code=502, detail="Failed to parse prompts from Claude")
@@ -414,6 +493,53 @@ async def create_status(input: StatusCheck):
 async def get_status():
     docs = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
     return [StatusCheck(**d) for d in docs]
+
+
+# =============== Templates ===============
+
+async def _seed_templates_if_empty():
+    count = await db.templates.count_documents({})
+    if count > 0:
+        return
+    docs = []
+    for t in SEED_TEMPLATES:
+        docs.append({"id": str(uuid.uuid4()), **t})
+    if docs:
+        await db.templates.insert_many(docs)
+        logger.info("Seeded %d templates", len(docs))
+
+
+@api_router.get("/templates", response_model=List[Template])
+async def list_templates():
+    await _seed_templates_if_empty()
+    docs = await db.templates.find({}, {"_id": 0}).sort("number", 1).to_list(100)
+    return [Template(**d) for d in docs]
+
+
+class TemplatePatch(BaseModel):
+    enabled: Optional[bool] = None
+    scaffold: Optional[str] = None
+    name: Optional[str] = None
+
+
+@api_router.patch("/templates/{template_id}", response_model=Template)
+async def update_template(template_id: str, patch: TemplatePatch):
+    upd = {k: v for k, v in patch.model_dump().items() if v is not None}
+    if not upd:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    res = await db.templates.update_one({"id": template_id}, {"$set": upd})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Template not found")
+    doc = await db.templates.find_one({"id": template_id}, {"_id": 0})
+    return Template(**doc)
+
+
+@api_router.post("/templates/reset", response_model=List[Template])
+async def reset_templates():
+    await db.templates.delete_many({})
+    await _seed_templates_if_empty()
+    docs = await db.templates.find({}, {"_id": 0}).sort("number", 1).to_list(100)
+    return [Template(**d) for d in docs]
 
 
 app.include_router(api_router)

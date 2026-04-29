@@ -1,5 +1,5 @@
 import { Link, NavLink, useLocation } from "react-router-dom";
-import { LayoutGrid, Plus, Settings, KeyRound } from "lucide-react";
+import { LayoutGrid, Plus, Settings, KeyRound, LayoutTemplate } from "lucide-react";
 import { keysStore } from "../lib/api";
 import { useEffect, useState } from "react";
 
@@ -15,6 +15,7 @@ export default function Layout({ children, onOpenKeys }) {
   const nav = [
     { to: "/", label: "Brands", icon: LayoutGrid, end: true },
     { to: "/brands/new", label: "New brand", icon: Plus },
+    { to: "/templates", label: "Templates", icon: LayoutTemplate },
   ];
 
   return (
