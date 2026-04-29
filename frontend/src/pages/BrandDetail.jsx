@@ -114,12 +114,31 @@ export default function BrandDetail({ onOpenKeys }) {
             <a href={brand.url.startsWith("http") ? brand.url : `https://${brand.url}`} target="_blank" rel="noreferrer"
                className="font-mono-tech text-xs text-black/55 hover:text-[var(--red)]">{cleanUrl}</a>
           </div>
-          <div className="flex items-center gap-5">
+          <div className="flex items-center gap-4">
             <span className="label-mono flex items-center" style={{ color: allDone ? "#16A34A" : "rgba(0,0,0,0.5)" }} data-testid="brand-status">
               <span className="dot" style={{ background: allDone ? "#16A34A" : "rgba(0,0,0,0.4)" }} />
               {allDone ? "All done" : (generating ? "Running" : "Ready")}
             </span>
             <span className="label-mono">Cost <span className="text-[var(--red)] font-mono-tech">${cost}</span></span>
+            {!phases.research && (
+              <button onClick={onResearch} disabled={generating} className="px-4 h-10 border border-ink hover:bg-ink hover:text-white text-sm transition-colors disabled:opacity-40" data-testid="research-button">
+                {generating ? <span>Running<span className="ascii-loader" /></span> : "Run research"}
+              </button>
+            )}
+            {phases.research && (
+              <>
+                <input
+                  value={angle}
+                  onChange={(e) => setAngle(e.target.value)}
+                  placeholder="Optional angle…"
+                  className="h-10 px-3 border border-soft hover:border-ink focus:border-[var(--red)] focus:outline-none text-sm font-mono-tech w-40 hidden md:block"
+                  data-testid="angle-input"
+                />
+                <button onClick={() => onGenerate()} disabled={generating} className="flex items-center gap-2 px-4 h-10 bg-[var(--red)] hover:bg-black text-white text-sm font-medium disabled:opacity-40 transition-colors" data-testid="generate-button">
+                  {generating ? <span>Running<span className="ascii-loader" /></span> : <><Sparkles size={14} strokeWidth={1.75} /> Run pipeline</>}
+                </button>
+              </>
+            )}
             <a
               href={renderedImages > 0 ? api.downloadZipUrl(id) : "#"}
               onClick={(e) => { if (renderedImages === 0) { e.preventDefault(); toast.error("No images to download"); } }}
@@ -159,40 +178,6 @@ export default function BrandDetail({ onOpenKeys }) {
                 {generating && <div className="flex items-center gap-2 text-black/55"><span className="ascii-loader" /> {phaseMsg}</div>}
               </div>
             )}
-          </div>
-
-          {/* Autopilot bar */}
-          <div className="border-t border-soft bg-white px-6 py-4 flex items-center justify-between gap-3" data-testid="autopilot-bar">
-            <div>
-              <span className="label-mono mr-2 text-black">Autopilot.</span>
-              <span className="text-sm text-black/55">The agent runs all three phases without input.</span>
-            </div>
-            <div className="flex items-center gap-3">
-              {!phases.research && (
-                <button onClick={onResearch} disabled={generating} className="px-4 h-10 border border-ink hover:bg-ink hover:text-white text-sm transition-colors disabled:opacity-40" data-testid="research-button">
-                  Run research
-                </button>
-              )}
-              {phases.research && !generating && (
-                <input
-                  value={angle}
-                  onChange={(e) => setAngle(e.target.value)}
-                  placeholder="Optional angle…"
-                  className="h-10 px-3 border border-soft hover:border-ink focus:border-[var(--red)] focus:outline-none text-sm font-mono-tech w-44"
-                  data-testid="angle-input"
-                />
-              )}
-              {phases.research && (
-                <button onClick={() => onGenerate()} disabled={generating} className="flex items-center gap-2 px-5 h-10 bg-[var(--red)] hover:bg-black text-white text-sm font-medium disabled:opacity-40 transition-colors" data-testid="generate-button">
-                  {generating ? <span>Running<span className="ascii-loader" /></span> : <><Sparkles size={14} strokeWidth={1.75} /> Run pipeline</>}
-                </button>
-              )}
-              {allDone && (
-                <span className="label-mono" style={{ color: "#16A34A" }}>
-                  <span className="dot" style={{ background: "#16A34A" }} /> Ready to download
-                </span>
-              )}
-            </div>
           </div>
         </section>
 
