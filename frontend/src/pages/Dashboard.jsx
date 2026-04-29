@@ -65,7 +65,7 @@ export default function Dashboard({ onOpenKeys }) {
     <div className="px-12 py-12 max-w-[1280px]">
       <div className="label-mono mb-3">Workspace · brands</div>
       <h1 className="font-display-tight text-7xl lg:text-8xl uppercase leading-[0.85]">
-        Static Ad<br/>Studio<span className="text-[#E52514]">.</span>
+        Static Ad<br/>Studio<span className="text-[var(--red)]">.</span>
       </h1>
       <p className="text-base text-black/70 mt-6 max-w-2xl leading-relaxed">
         Reverse-engineer any brand. Ship ads at agency volume. Drop a URL — research,
@@ -105,7 +105,7 @@ export default function Dashboard({ onOpenKeys }) {
             <p className="text-black/60 mt-4 max-w-md leading-relaxed">
               Drop a URL above. The agent reverse-engineers the whole visual identity — fonts, palette, photography direction — then generates 15 static ad creatives. Fully automatic.
             </p>
-            <button onClick={() => navigate("/brands/new")} className="label-mono text-coral hover:text-[#E52514] mt-4 underline" data-testid="open-wizard-cta">
+            <button onClick={() => navigate("/brands/new")} className="label-mono text-coral hover:text-[var(--red)] mt-4 underline" data-testid="open-wizard-cta">
               Or use the full wizard →
             </button>
           </div>

@@ -114,7 +114,7 @@ class Template(BaseModel):
 
 SEED_TEMPLATES: List[dict] = [
     {"number": 1, "name": "Headline Ad", "aspect": "4:5", "needs_product": True, "category": "headline", "enabled": False,
-     "scaffold": "A bold typographic headline ad. The product is hero-centered against a clean color-blocked background drawn from the brand palette. Strong sans-serif headline overlay (do not render text in the image), shallow depth of field, studio lighting."},
+     "scaffold": "A bold headline advertisement for [BRAND NAME]. The headline reads: \"[HEADLINE TEXT]\" set in very large [HEADLINE FONT] type, centered. Beneath the headline, a concise subhead: \"[SUBHEAD COPY]\". The product is centered in the lower third on a flat [BRAND BACKGROUND COLOR] background. Use [BRAND PRIMARY COLOR] for the CTA button at the bottom: \"[CTA TEXT]\". Crisp studio lighting, clean composition, packaging visible and legible."},
     {"number": 2, "name": "Offer Promotion", "aspect": "1:1", "needs_product": True, "category": "offer", "enabled": False,
      "scaffold": "A promotional sale ad with a starburst/badge composition. Product front and center, vibrant accent color on a clean stage. Festive, urgent, high contrast."},
     {"number": 3, "name": "Testimonial Card", "aspect": "4:5", "needs_product": False, "category": "social_proof", "enabled": True,
@@ -520,6 +520,8 @@ class TemplatePatch(BaseModel):
     enabled: Optional[bool] = None
     scaffold: Optional[str] = None
     name: Optional[str] = None
+    aspect: Optional[str] = None
+    needs_product: Optional[bool] = None
 
 
 @api_router.patch("/templates/{template_id}", response_model=Template)

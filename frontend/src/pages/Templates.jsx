@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { Pencil, RotateCcw, X } from "lucide-react";
+import { Pencil, RotateCcw, X, Save, Check } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../lib/api";
+
+const ASPECTS = ["1:1", "4:5", "9:16", "16:9", "4:3"];
 
 export default function Templates() {
   const [items, setItems] = useState([]);
@@ -64,7 +66,7 @@ export default function Templates() {
     <div className="px-12 py-12 max-w-[1280px]">
       <div className="label-mono mb-3">Templates</div>
       <div className="flex items-end justify-between flex-wrap gap-4">
-        <h1 className="font-display-tight text-6xl lg:text-7xl uppercase leading-[0.9]">Template library<span className="text-[#E52514]">.</span></h1>
+        <h1 className="font-display-tight text-6xl lg:text-7xl uppercase leading-[0.9]">Template library<span className="text-[var(--red)]">.</span></h1>
         <button
           onClick={resetAll}
           disabled={resetBusy}
@@ -104,7 +106,7 @@ export default function Templates() {
               <div className="font-mono-tech text-xs text-black/50">№{String(t.number).padStart(2, "0")}</div>
               <button
                 onClick={() => setEditing(t)}
-                className="flex items-center gap-2 text-left hover:text-[#E52514]"
+                className="flex items-center gap-2 text-left hover:text-[var(--red)]"
                 data-testid={`template-edit-${t.number}`}
               >
                 <span className="text-base font-medium">{t.name}</span>
@@ -118,7 +120,7 @@ export default function Templates() {
                   onClick={() => toggle(t)}
                   className={`label-mono w-16 h-8 flex items-center justify-center transition-colors ${
                     t.enabled
-                      ? "bg-[#E52514] text-white border border-[#E52514]"
+                      ? "bg-[var(--red)] text-white border border-[var(--red)]"
                       : "bg-white text-black border border-ink"
                   }`}
                   data-testid={`template-toggle-${t.number}`}
@@ -146,52 +148,88 @@ export default function Templates() {
 function EditModal({ template, onClose, onSave }) {
   const [name, setName] = useState(template.name);
   const [scaffold, setScaffold] = useState(template.scaffold);
+  const [aspect, setAspect] = useState(template.aspect);
+  const [needsProduct, setNeedsProduct] = useState(template.needs_product);
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center px-6" data-testid="template-edit-modal">
-      <div className="bg-white border border-ink w-full max-w-[680px] reveal">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-soft">
+    <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-stretch justify-end" data-testid="template-edit-modal">
+      <div className="bg-cream w-full md:w-[760px] max-w-full overflow-y-auto reveal border-l border-ink">
+        <div className="px-10 md:px-14 py-10 md:py-14 space-y-8">
+          {/* Header */}
           <div>
-            <div className="label-mono">Template №{String(template.number).padStart(2, "0")}</div>
-            <h3 className="font-display text-2xl uppercase">Edit scaffold</h3>
+            <div className="label-mono">Edit template №{String(template.number).padStart(2, "0")}</div>
+            <h2 className="font-display-tight text-5xl md:text-6xl uppercase leading-[0.9] mt-2">{template.name}</h2>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-ink hover:text-white" data-testid="template-edit-close">
-            <X size={16} strokeWidth={1.5} />
-          </button>
-        </div>
-        <div className="px-6 py-5 space-y-4">
+
+          {/* Name */}
           <div>
             <div className="label-mono mb-2">Name</div>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full h-11 px-3 border border-soft focus:border-ink focus:outline-none"
+              className="w-full h-14 px-4 bg-white border border-ink focus:border-[var(--red)] focus:outline-none text-base"
               data-testid="template-edit-name"
             />
           </div>
+
+          {/* Aspect ratio + checkbox */}
+          <div className="flex items-end gap-8 flex-wrap">
+            <div className="flex-1 min-w-[200px] max-w-[280px]">
+              <div className="label-mono mb-2">Aspect ratio</div>
+              <select
+                value={aspect}
+                onChange={(e) => setAspect(e.target.value)}
+                className="w-full h-14 px-4 bg-white border border-ink focus:border-[var(--red)] focus:outline-none text-base font-mono-tech"
+                data-testid="template-edit-aspect"
+              >
+                {ASPECTS.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
+            <label className="flex items-center gap-3 cursor-pointer h-14 select-none" data-testid="template-edit-needs-product">
+              <span
+                className={`w-6 h-6 border border-ink flex items-center justify-center transition-colors ${needsProduct ? "bg-[var(--red)]" : "bg-white"}`}
+                role="checkbox"
+                aria-checked={needsProduct}
+                onClick={() => setNeedsProduct((v) => !v)}
+              >
+                {needsProduct && <Check size={14} strokeWidth={2.5} className="text-white" />}
+              </span>
+              <span className="text-base" onClick={() => setNeedsProduct((v) => !v)}>
+                Needs product images
+              </span>
+            </label>
+          </div>
+
+          {/* Prompt scaffold */}
           <div>
             <div className="label-mono mb-2">Prompt scaffold</div>
             <textarea
               value={scaffold}
               onChange={(e) => setScaffold(e.target.value)}
-              rows={8}
-              className="w-full p-3 border border-soft focus:border-ink focus:outline-none font-mono-tech text-sm leading-relaxed"
+              rows={12}
+              className="w-full p-5 bg-white border border-ink focus:border-[var(--red)] focus:outline-none text-base leading-relaxed resize-y"
               data-testid="template-edit-scaffold"
             />
-            <div className="label-mono mt-2">
-              Aspect: {template.aspect} · Category: {template.category} · {template.needs_product ? "Needs product" : "No product needed"}
-            </div>
           </div>
-        </div>
-        <div className="px-6 py-4 border-t border-soft flex items-center justify-end gap-3">
-          <button onClick={onClose} className="label-mono hover:text-[#E52514]" data-testid="template-edit-cancel">Cancel</button>
-          <button
-            onClick={() => onSave({ name, scaffold })}
-            disabled={!name.trim() || !scaffold.trim()}
-            className="px-5 h-10 bg-[#E52514] hover:bg-black text-white text-sm font-medium disabled:opacity-40 transition-colors"
-            data-testid="template-edit-save"
-          >
-            Save
-          </button>
+
+          {/* Footer */}
+          <div className="flex items-center justify-end gap-6 pt-4 border-t border-soft">
+            <button
+              onClick={onClose}
+              className="flex items-center gap-2 text-base hover:text-[var(--red)]"
+              data-testid="template-edit-cancel"
+            >
+              <X size={16} strokeWidth={1.5} /> Cancel
+            </button>
+            <button
+              onClick={() => onSave({ name, scaffold, aspect, needs_product: needsProduct })}
+              disabled={!name.trim() || !scaffold.trim()}
+              className="flex items-center gap-2 px-6 h-12 bg-[var(--red)] hover:bg-black text-white text-base font-medium disabled:opacity-40 transition-colors"
+              data-testid="template-edit-save"
+            >
+              <Save size={16} strokeWidth={1.75} /> Save
+            </button>
+          </div>
         </div>
       </div>
     </div>

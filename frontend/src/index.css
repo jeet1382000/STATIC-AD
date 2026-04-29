@@ -12,7 +12,7 @@
   --line: #2A2A2A1A;
   --coral: #F4A8A2;
   --coral-deep: #ED8E88;
-  --red: #E52514;
+  --red: #d20536;
 
   --background: 42 42% 92%;
   --foreground: 0 0% 4%;
@@ -26,13 +26,13 @@
   --secondary-foreground: 0 0% 4%;
   --muted: 42 30% 88%;
   --muted-foreground: 0 0% 40%;
-  --accent: 4 87% 49%;
+  --accent: 346 95% 42%;
   --accent-foreground: 0 0% 100%;
-  --destructive: 4 87% 49%;
+  --destructive: 346 95% 42%;
   --destructive-foreground: 0 0% 100%;
   --border: 0 0% 0% / 0.10;
   --input: 0 0% 0% / 0.15;
-  --ring: 4 87% 49%;
+  --ring: 346 95% 42%;
   --radius: 0;
 }
 

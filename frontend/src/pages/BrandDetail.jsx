@@ -57,7 +57,7 @@ export default function BrandDetail({ onOpenKeys }) {
 
   return (
     <div className="px-12 py-12 max-w-[1280px]">
-      <Link to="/" className="label-mono flex items-center gap-2 hover:text-[#E52514] mb-8" data-testid="back-to-dashboard">
+      <Link to="/" className="label-mono flex items-center gap-2 hover:text-[var(--red)] mb-8" data-testid="back-to-dashboard">
         <ArrowLeft size={14} strokeWidth={1.5} /> Back to workspace
       </Link>
 
@@ -65,7 +65,7 @@ export default function BrandDetail({ onOpenKeys }) {
         <div className="lg:col-span-7">
           <div className="label-mono">№ {brand.id.slice(0, 6)} · brand</div>
           <h1 className="font-display-tight text-6xl md:text-7xl uppercase leading-[0.9] mt-2">{brand.name}</h1>
-          <a href={brand.url.startsWith("http") ? brand.url : `https://${brand.url}`} target="_blank" rel="noreferrer" className="font-mono-tech text-sm text-neutral-500 hover:text-[#E52514] mt-3 inline-block">
+          <a href={brand.url.startsWith("http") ? brand.url : `https://${brand.url}`} target="_blank" rel="noreferrer" className="font-mono-tech text-sm text-neutral-500 hover:text-[var(--red)] mt-3 inline-block">
             ↗ {brand.url}
           </a>
           {brand.product_name && (
@@ -77,7 +77,7 @@ export default function BrandDetail({ onOpenKeys }) {
             value={angle}
             onChange={(e) => setAngle(e.target.value)}
             placeholder="Optional creative angle…"
-            className="flex-1 h-12 px-4 border border-black/20 focus:border-[#E52514] focus:outline-none font-mono-tech text-sm"
+            className="flex-1 h-12 px-4 border border-black/20 focus:border-[var(--red)] focus:outline-none font-mono-tech text-sm"
             data-testid="angle-quick-input"
           />
           <button
@@ -160,7 +160,7 @@ export default function BrandDetail({ onOpenKeys }) {
           <div className="flex items-center gap-3">
             <span className="label-mono">{latestRun ? `${latestRun.creatives.filter(c => c.image_url).length}/15` : "0/15"}</span>
             {latestRun && (
-              <button onClick={() => onGenerate()} className="label-mono hover:text-[#E52514] flex items-center gap-1" data-testid="regenerate-button">
+              <button onClick={() => onGenerate()} className="label-mono hover:text-[var(--red)] flex items-center gap-1" data-testid="regenerate-button">
                 <RefreshCw size={12} strokeWidth={1.5} /> Regenerate
               </button>
             )}
@@ -189,7 +189,7 @@ export default function BrandDetail({ onOpenKeys }) {
                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/70 transition-colors duration-150 p-4 flex flex-col justify-between opacity-0 group-hover:opacity-100">
                       <span className="font-mono-tech text-[10px] uppercase tracking-widest text-white">№{String(i + 1).padStart(2, "0")}</span>
                       <p className="text-white text-xs leading-relaxed line-clamp-6">{c.prompt}</p>
-                      <a href={c.image_url} target="_blank" rel="noreferrer" download className="self-start flex items-center gap-1 label-mono text-white hover:text-[#E52514]">
+                      <a href={c.image_url} target="_blank" rel="noreferrer" download className="self-start flex items-center gap-1 label-mono text-white hover:text-[var(--red)]">
                         <Download size={12} strokeWidth={1.5} /> Download
                       </a>
                     </div>
@@ -197,7 +197,7 @@ export default function BrandDetail({ onOpenKeys }) {
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center">
                     <span className="label-mono mb-2">№{String(i + 1).padStart(2, "0")}</span>
-                    <span className="text-xs text-[#E52514] font-mono-tech">{c.error || "no image"}</span>
+                    <span className="text-xs text-[var(--red)] font-mono-tech">{c.error || "no image"}</span>
                   </div>
                 )}
               </div>

@@ -50,7 +50,7 @@ export default function BrandCard({ brand, index, onDelete }) {
       </Link>
       <button
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(brand.id); }}
-        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 bg-white border border-soft hover:border-[#E52514] hover:text-[#E52514] p-1.5 transition-all"
+        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 bg-white border border-soft hover:border-[var(--red)] hover:text-[var(--red)] p-1.5 transition-all"
         title="Delete"
         data-testid={`delete-brand-${brand.id}`}
       >

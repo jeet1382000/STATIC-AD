@@ -39,7 +39,7 @@ export default function DropUrlInput({ onSubmit, busy }) {
       <p className="text-sm text-black/60 mt-3 max-w-2xl leading-relaxed">
         Paste any brand homepage. The agent runs all 3 phases automatically — research → prompts → 15 images.
         No further input needed. Average run: 6–10 minutes.{" "}
-        <a href="/brands/new" className="text-coral underline hover:text-[#E52514]">Need to upload product photos? Use the wizard ↗</a>
+        <a href="/brands/new" className="text-coral underline hover:text-[var(--red)]">Need to upload product photos? Use the wizard ↗</a>
       </p>
     </form>
   );

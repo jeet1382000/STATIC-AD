@@ -85,7 +85,7 @@ export default function KeysModal({ open, onClose }) {
                 value={fal}
                 onChange={(e) => setFal(e.target.value)}
                 placeholder="key:hex…"
-                className="flex-1 h-12 px-4 border border-black/20 focus:border-[#E52514] focus:outline-none font-mono-tech text-sm bg-white"
+                className="flex-1 h-12 px-4 border border-black/20 focus:border-[var(--red)] focus:outline-none font-mono-tech text-sm bg-white"
                 data-testid="fal-key-input"
               />
               <button
@@ -113,7 +113,7 @@ export default function KeysModal({ open, onClose }) {
                 value={llm}
                 onChange={(e) => setLlm(e.target.value)}
                 placeholder="sk-ant-…"
-                className="flex-1 h-12 px-4 border border-black/20 focus:border-[#E52514] focus:outline-none font-mono-tech text-sm bg-white"
+                className="flex-1 h-12 px-4 border border-black/20 focus:border-[var(--red)] focus:outline-none font-mono-tech text-sm bg-white"
                 data-testid="llm-key-input"
               />
               <button
@@ -129,14 +129,14 @@ export default function KeysModal({ open, onClose }) {
 
           {result && (
             <div
-              className={`border p-4 text-sm ${result.ok ? "border-black bg-black text-white" : "border-[#E52514] text-[#E52514]"}`}
+              className={`border p-4 text-sm ${result.ok ? "border-black bg-black text-white" : "border-[var(--red)] text-[var(--red)]"}`}
               data-testid="keys-test-result"
             >
               {result.ok ? "Both keys validated. Ready to ship." : `× ${result.error}`}
             </div>
           )}
 
-          <div className="text-[11px] font-mono-tech leading-relaxed text-neutral-500 border-l-2 border-[#E52514] pl-3">
+          <div className="text-[11px] font-mono-tech leading-relaxed text-neutral-500 border-l-2 border-[var(--red)] pl-3">
             Stored locally as <code>localStorage.sas.fal_key</code> & <code>.llm_key</code>. Clear them anytime.
           </div>
         </div>
@@ -144,7 +144,7 @@ export default function KeysModal({ open, onClose }) {
         <div className="px-8 py-5 border-t border-black/10 flex items-center justify-between gap-3">
           <button
             onClick={onClear}
-            className="label-mono hover:text-[#E52514]"
+            className="label-mono hover:text-[var(--red)]"
             data-testid="clear-keys-button"
           >
             Clear keys

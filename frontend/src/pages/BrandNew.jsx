@@ -93,7 +93,7 @@ export default function BrandNew({ onOpenKeys }) {
     <div className="grid grid-cols-3 gap-3 mb-10" data-testid="stepper">
       {[1, 2, 3].map((i) => (
         <div key={i} className="flex flex-col gap-1">
-          <div className={`h-1 w-full ${step >= i ? "bg-[#E52514]" : "bg-black/15"}`} />
+          <div className={`h-1 w-full ${step >= i ? "bg-[var(--red)]" : "bg-black/15"}`} />
           <div className="flex items-center justify-between mt-1">
             <span className={`text-sm ${step === i ? "text-black font-medium" : "text-black/40"}`}>Step {i}</span>
             <span className="font-mono-tech text-xs text-black/50">№0{i}</span>
@@ -105,13 +105,13 @@ export default function BrandNew({ onOpenKeys }) {
 
   return (
     <div className="px-12 py-12 max-w-[920px]">
-      <button onClick={() => navigate("/")} className="label-mono flex items-center gap-2 hover:text-[#E52514] mb-8" data-testid="wizard-back-link">
+      <button onClick={() => navigate("/")} className="label-mono flex items-center gap-2 hover:text-[var(--red)] mb-8" data-testid="wizard-back-link">
         <ArrowLeft size={14} strokeWidth={1.5} /> Back
       </button>
 
       <div className="label-mono">Brands · New</div>
       <h1 className="font-display-tight text-6xl lg:text-7xl uppercase leading-[0.9] mt-3">
-        Create brand workspace<span className="text-[#E52514]">.</span>
+        Create brand workspace<span className="text-[var(--red)]">.</span>
       </h1>
       <p className="text-black/60 mt-3 mb-10">Three steps. The agent takes over from there.</p>
 
@@ -139,7 +139,7 @@ export default function BrandNew({ onOpenKeys }) {
                 setDragOver(false);
                 if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files);
               }}
-              className={`cursor-pointer border-2 border-dashed ${dragOver ? "border-[#E52514] bg-[#E52514]/5" : "border-black/30 bg-cream"} hover:border-ink transition-colors py-16 px-8 text-center select-none`}
+              className={`cursor-pointer border-2 border-dashed ${dragOver ? "border-[var(--red)] bg-[var(--red)]/5" : "border-black/30 bg-cream"} hover:border-ink transition-colors py-16 px-8 text-center select-none`}
               data-testid="image-dropzone"
             >
               <input
@@ -166,7 +166,7 @@ export default function BrandNew({ onOpenKeys }) {
                     <img src={img.dataUrl} alt={img.name} className="w-full h-full object-cover" />
                     <button
                       onClick={() => removeImage(i)}
-                      className="absolute top-1 right-1 bg-white border border-ink p-1 opacity-0 group-hover:opacity-100 hover:bg-[#E52514] hover:text-white transition"
+                      className="absolute top-1 right-1 bg-white border border-ink p-1 opacity-0 group-hover:opacity-100 hover:bg-[var(--red)] hover:text-white transition"
                       data-testid={`remove-image-${i}`}
                       type="button"
                     >
@@ -194,7 +194,7 @@ export default function BrandNew({ onOpenKeys }) {
                 onChange={(e) => setAngle(e.target.value)}
                 rows={5}
                 placeholder="Surprise me. Or describe a campaign angle, season, mood…"
-                className="w-full p-4 border border-black/20 focus:border-[#E52514] focus:outline-none font-mono-tech text-sm bg-white"
+                className="w-full p-4 border border-black/20 focus:border-[var(--red)] focus:outline-none font-mono-tech text-sm bg-white"
                 data-testid="angle-input"
               />
             </div>
@@ -210,16 +210,16 @@ export default function BrandNew({ onOpenKeys }) {
 
         <div className="flex items-center justify-between pt-6 border-t border-soft">
           {step > 1 ? (
-            <button onClick={back} className="flex items-center gap-2 text-sm hover:text-[#E52514]" data-testid="wizard-back-button">
+            <button onClick={back} className="flex items-center gap-2 text-sm hover:text-[var(--red)]" data-testid="wizard-back-button">
               <ArrowLeft size={14} strokeWidth={1.5} /> Back
             </button>
           ) : <span />}
           {step < 3 ? (
-            <button onClick={next} className="flex items-center gap-2 px-6 h-11 bg-[#E52514] hover:bg-black text-white transition-colors text-sm font-medium" data-testid="wizard-next-button">
+            <button onClick={next} className="flex items-center gap-2 px-6 h-11 bg-[var(--red)] hover:bg-black text-white transition-colors text-sm font-medium" data-testid="wizard-next-button">
               Next <ArrowRight size={14} strokeWidth={1.5} />
             </button>
           ) : (
-            <button onClick={finish} disabled={busy} className="flex items-center gap-2 px-6 h-11 bg-[#E52514] hover:bg-black text-white disabled:opacity-50 transition-colors text-sm font-medium" data-testid="wizard-finish-button">
+            <button onClick={finish} disabled={busy} className="flex items-center gap-2 px-6 h-11 bg-[var(--red)] hover:bg-black text-white disabled:opacity-50 transition-colors text-sm font-medium" data-testid="wizard-finish-button">
               {busy ? <span>Building<span className="ascii-loader" /></span> : <>Generate ads <ArrowRight size={14} strokeWidth={1.5} /></>}
             </button>
           )}
@@ -237,7 +237,7 @@ function Field({ label, value, onChange, placeholder, mono, highlight, testid })
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className={`w-full h-12 px-4 bg-white border ${highlight ? "border-[#E52514]" : "border-black/20"} focus:border-[#E52514] focus:outline-none ${mono ? "font-mono-tech text-sm" : "text-base"}`}
+        className={`w-full h-12 px-4 bg-white border ${highlight ? "border-[var(--red)]" : "border-black/20"} focus:border-[var(--red)] focus:outline-none ${mono ? "font-mono-tech text-sm" : "text-base"}`}
         data-testid={testid}
       />
     </div>
