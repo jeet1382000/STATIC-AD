@@ -158,7 +158,7 @@ export default function BrandDetail({ onOpenKeys }) {
         <div className="flex items-center justify-between border-b border-black pb-3 mb-6">
             <h2 className="font-display text-2xl uppercase">Ad creatives</h2>
           <div className="flex items-center gap-3">
-            <span className="label-mono">{latestRun ? `${latestRun.creatives.filter(c => c.image_url).length}/15` : "0/15"}</span>
+            <span className="label-mono">{latestRun ? `${latestRun.creatives.filter(c => c.image_url).length}/${latestRun.creatives.length}` : "0/0"}</span>
             {latestRun && (
               <button onClick={() => onGenerate()} className="label-mono hover:text-[var(--red)] flex items-center gap-1" data-testid="regenerate-button">
                 <RefreshCw size={12} strokeWidth={1.5} /> Regenerate
@@ -168,40 +168,52 @@ export default function BrandDetail({ onOpenKeys }) {
         </div>
 
         {generating && (!latestRun || latestRun.creatives.every(c => !c.image_url)) ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-px bg-black/10 border border-black/10">
-            {Array.from({ length: 15 }).map((_, i) => (
-              <div key={i} className="aspect-square bg-neutral-100 flex items-center justify-center">
-                <span className="label-mono">№{String(i + 1).padStart(2, "0")} <span className="ascii-loader" /></span>
-              </div>
-            ))}
+          <div className="columns-2 md:columns-3 lg:columns-4 gap-3" data-testid="ad-creatives-grid-loading">
+            {Array.from({ length: 15 }).map((_, i) => {
+              const aspects = ["aspect-square", "aspect-[4/5]", "aspect-[9/16]", "aspect-[16/9]", "aspect-[4/3]"];
+              const a = aspects[i % aspects.length];
+              return (
+                <div key={i} className={`${a} bg-cream-deep border border-soft mb-3 break-inside-avoid flex items-center justify-center`}>
+                  <span className="label-mono">№{String(i + 1).padStart(2, "0")} <span className="ascii-loader" /></span>
+                </div>
+              );
+            })}
           </div>
         ) : !latestRun ? (
           <div className="border border-dashed border-black/30 p-10 text-center label-mono">
             No creatives yet. Hit Generate.
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-px bg-black/10 border border-black/10" data-testid="ad-creatives-grid">
-            {latestRun.creatives.map((c, i) => (
-              <div key={c.id} className="aspect-square bg-white relative group overflow-hidden" data-testid={`creative-${i}`}>
-                {c.image_url ? (
-                  <>
-                    <img src={c.image_url} alt={`Creative ${i + 1}`} className="w-full h-full object-cover" />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/70 transition-colors duration-150 p-4 flex flex-col justify-between opacity-0 group-hover:opacity-100">
-                      <span className="font-mono-tech text-[10px] uppercase tracking-widest text-white">№{String(i + 1).padStart(2, "0")}</span>
-                      <p className="text-white text-xs leading-relaxed line-clamp-6">{c.prompt}</p>
-                      <a href={c.image_url} target="_blank" rel="noreferrer" download className="self-start flex items-center gap-1 label-mono text-white hover:text-[var(--red)]">
-                        <Download size={12} strokeWidth={1.5} /> Download
-                      </a>
+          <div className="columns-2 md:columns-3 lg:columns-4 gap-3" data-testid="ad-creatives-grid">
+            {latestRun.creatives.map((c, i) => {
+              const aspectMap = { "1:1": "aspect-square", "4:5": "aspect-[4/5]", "9:16": "aspect-[9/16]", "16:9": "aspect-[16/9]", "4:3": "aspect-[4/3]" };
+              const a = aspectMap[c.aspect] || "aspect-square";
+              return (
+                <div key={c.id} className={`${a} bg-white border border-soft relative group overflow-hidden mb-3 break-inside-avoid`} data-testid={`creative-${i}`}>
+                  {c.image_url ? (
+                    <>
+                      <img src={c.image_url} alt={`Creative ${i + 1}`} className="w-full h-full object-cover" />
+                      <div className="absolute top-2 left-2 bg-black text-white label-mono px-2 py-0.5">{c.aspect}</div>
+                      {c.template_name && (
+                        <div className="absolute top-2 right-2 bg-white/90 label-mono px-2 py-0.5 max-w-[60%] truncate">{c.template_name}</div>
+                      )}
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/70 transition-colors duration-150 p-4 flex flex-col justify-between opacity-0 group-hover:opacity-100">
+                        <span className="font-mono-tech text-[10px] uppercase tracking-widest text-white">№{String(i + 1).padStart(2, "0")} · {c.template_name || "free"}</span>
+                        <p className="text-white text-xs leading-relaxed line-clamp-6">{c.prompt}</p>
+                        <a href={c.image_url} target="_blank" rel="noreferrer" download className="self-start flex items-center gap-1 label-mono text-white hover:text-[var(--red)]">
+                          <Download size={12} strokeWidth={1.5} /> Download
+                        </a>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center">
+                      <span className="label-mono mb-2">№{String(i + 1).padStart(2, "0")} · {c.aspect}</span>
+                      <span className="text-xs text-[var(--red)] font-mono-tech">{c.error || "no image"}</span>
                     </div>
-                  </>
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center">
-                    <span className="label-mono mb-2">№{String(i + 1).padStart(2, "0")}</span>
-                    <span className="text-xs text-[var(--red)] font-mono-tech">{c.error || "no image"}</span>
-                  </div>
-                )}
-              </div>
-            ))}
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 

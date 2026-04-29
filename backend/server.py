@@ -89,6 +89,9 @@ class AdCreative(BaseModel):
     prompt: str
     image_url: Optional[str] = None
     error: Optional[str] = None
+    aspect: str = "1:1"
+    template_name: Optional[str] = None
+    template_number: Optional[int] = None
 
 
 class AdRun(BaseModel):
@@ -215,15 +218,18 @@ async def _claude_call(api_key: str, system: str, user: str, max_tokens: int = 1
     return await asyncio.to_thread(_run)
 
 
-async def _fal_generate(fal_key: str, prompt: str) -> dict:
-    """Call fal.ai sync endpoint to generate one image. Returns dict {url} or {error}."""
+async def _fal_generate(fal_key: str, prompt: str, image_size=None) -> dict:
+    """Call fal.ai sync endpoint to generate one image. Returns dict {url} or {error}.
+
+    image_size: either a string enum (e.g. "square_hd") or a dict {"width": int, "height": int}.
+    """
     headers = {
         "Authorization": f"Key {fal_key}",
         "Content-Type": "application/json",
     }
     payload = {
         "prompt": prompt,
-        "image_size": "square_hd",
+        "image_size": image_size or "square_hd",
         "num_inference_steps": 4,
         "num_images": 1,
         "enable_safety_checker": True,
@@ -240,6 +246,23 @@ async def _fal_generate(fal_key: str, prompt: str) -> dict:
             return {"url": images[0]["url"]}
     except Exception as e:
         return {"error": f"fal request failed: {str(e)[:160]}"}
+
+
+def _aspect_to_image_size(aspect: str):
+    """Map a human aspect string to fal flux/schnell image_size."""
+    a = (aspect or "1:1").strip()
+    if a == "1:1":
+        return "square_hd"
+    if a == "9:16":
+        return "portrait_16_9"
+    if a == "16:9":
+        return "landscape_16_9"
+    if a == "4:3":
+        return "landscape_4_3"
+    if a == "4:5":
+        # custom — flux requires width/height divisible by 16 (832/1040 ≈ 4:5)
+        return {"width": 832, "height": 1040}
+    return "square_hd"
 
 
 # =============== Routes ===============
@@ -451,15 +474,25 @@ Return 15 prompts."""
     if not prompts:
         raise HTTPException(status_code=502, detail="Claude returned no prompts")
 
-    run = AdRun(brand_id=brand_id, creatives=[AdCreative(prompt=p) for p in prompts])
+    # Pair each prompt with the originating template (or default 1:1)
+    creatives: List[AdCreative] = []
+    for i, p in enumerate(prompts):
+        if enabled and i < len(enabled):
+            t = enabled[i]
+            creatives.append(AdCreative(prompt=p, aspect=t.aspect, template_name=t.name, template_number=t.number))
+        else:
+            creatives.append(AdCreative(prompt=p, aspect="1:1"))
+
+    run = AdRun(brand_id=brand_id, creatives=creatives)
     await db.ad_runs.insert_one(run.model_dump())
 
     # Generate images concurrently with cap
     sem = asyncio.Semaphore(6)
 
     async def worker(creative: AdCreative):
+        size = _aspect_to_image_size(creative.aspect)
         async with sem:
-            res = await _fal_generate(f_key, creative.prompt)
+            res = await _fal_generate(f_key, creative.prompt, image_size=size)
         if "url" in res:
             creative.image_url = res["url"]
         else:
