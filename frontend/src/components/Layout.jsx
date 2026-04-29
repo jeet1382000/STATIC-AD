@@ -16,6 +16,7 @@ export default function Layout({ children, onOpenKeys }) {
     { to: "/", label: "Brands", icon: LayoutGrid, end: true },
     { to: "/brands/new", label: "New brand", icon: Plus },
     { to: "/templates", label: "Templates", icon: LayoutTemplate },
+    { to: "/settings", label: "Settings", icon: Settings },
   ];
 
   return (
@@ -50,14 +51,6 @@ export default function Layout({ children, onOpenKeys }) {
               </NavLink>
             );
           })}
-          <button
-            onClick={onOpenKeys}
-            className="w-full flex items-center gap-3 h-10 px-3 text-black/80 hover:bg-cream-deep text-sm"
-            data-testid="nav-settings"
-          >
-            <Settings size={16} strokeWidth={1.5} />
-            Settings
-          </button>
         </nav>
 
         <div className="px-4 pb-4">

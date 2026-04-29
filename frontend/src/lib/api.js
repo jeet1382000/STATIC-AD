@@ -46,4 +46,7 @@ export const api = {
   listTemplates: () => axios.get(`${API}/templates`),
   patchTemplate: (id, patch) => axios.patch(`${API}/templates/${id}`, patch),
   resetTemplates: () => axios.post(`${API}/templates/reset`),
+
+  getSettings: () => axios.get(`${API}/settings`),
+  patchSettings: (patch) => axios.patch(`${API}/settings`, patch),
 };

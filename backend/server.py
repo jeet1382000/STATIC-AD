@@ -218,7 +218,7 @@ async def _claude_call(api_key: str, system: str, user: str, max_tokens: int = 1
     return await asyncio.to_thread(_run)
 
 
-async def _fal_generate(fal_key: str, prompt: str, image_size=None) -> dict:
+async def _fal_generate(fal_key: str, prompt: str, image_size=None, num_inference_steps: int = 4) -> dict:
     """Call fal.ai sync endpoint to generate one image. Returns dict {url} or {error}.
 
     image_size: either a string enum (e.g. "square_hd") or a dict {"width": int, "height": int}.
@@ -230,7 +230,7 @@ async def _fal_generate(fal_key: str, prompt: str, image_size=None) -> dict:
     payload = {
         "prompt": prompt,
         "image_size": image_size or "square_hd",
-        "num_inference_steps": 4,
+        "num_inference_steps": max(1, min(int(num_inference_steps), 12)),
         "num_images": 1,
         "enable_safety_checker": True,
     }
@@ -486,13 +486,18 @@ Return 15 prompts."""
     run = AdRun(brand_id=brand_id, creatives=creatives)
     await db.ad_runs.insert_one(run.model_dump())
 
+    # Read default quality from settings
+    settings_doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
+    settings = Settings(**settings_doc) if settings_doc else Settings()
+    steps = QUALITY_TO_STEPS.get(settings.quality, 4)
+
     # Generate images concurrently with cap
     sem = asyncio.Semaphore(6)
 
     async def worker(creative: AdCreative):
         size = _aspect_to_image_size(creative.aspect)
         async with sem:
-            res = await _fal_generate(f_key, creative.prompt, image_size=size)
+            res = await _fal_generate(f_key, creative.prompt, image_size=size, num_inference_steps=steps)
         if "url" in res:
             creative.image_url = res["url"]
         else:
@@ -557,6 +562,23 @@ class TemplatePatch(BaseModel):
     needs_product: Optional[bool] = None
 
 
+class Settings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = "defaults"
+    quality: str = "medium"           # low | medium | high
+    variations_per_prompt: int = 1    # 1..4
+    cost_cap_per_run_usd: float = 20.0
+
+
+class SettingsPatch(BaseModel):
+    quality: Optional[str] = None
+    variations_per_prompt: Optional[int] = None
+    cost_cap_per_run_usd: Optional[float] = None
+
+
+QUALITY_TO_STEPS = {"low": 2, "medium": 4, "high": 8}
+
+
 @api_router.patch("/templates/{template_id}", response_model=Template)
 async def update_template(template_id: str, patch: TemplatePatch):
     upd = {k: v for k, v in patch.model_dump().items() if v is not None}
@@ -575,6 +597,32 @@ async def reset_templates():
     await _seed_templates_if_empty()
     docs = await db.templates.find({}, {"_id": 0}).sort("number", 1).to_list(100)
     return [Template(**d) for d in docs]
+
+
+# =============== Settings ===============
+
+@api_router.get("/settings", response_model=Settings)
+async def get_settings():
+    doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
+    if not doc:
+        s = Settings()
+        await db.settings.insert_one(s.model_dump())
+        return s
+    return Settings(**doc)
+
+
+@api_router.patch("/settings", response_model=Settings)
+async def update_settings(patch: SettingsPatch):
+    upd = {k: v for k, v in patch.model_dump().items() if v is not None}
+    if "quality" in upd and upd["quality"] not in QUALITY_TO_STEPS:
+        raise HTTPException(status_code=400, detail="quality must be low | medium | high")
+    if "variations_per_prompt" in upd and not (1 <= int(upd["variations_per_prompt"]) <= 4):
+        raise HTTPException(status_code=400, detail="variations_per_prompt must be 1..4")
+    if "cost_cap_per_run_usd" in upd and float(upd["cost_cap_per_run_usd"]) < 0:
+        raise HTTPException(status_code=400, detail="cost_cap_per_run_usd must be >= 0")
+    await db.settings.update_one({"id": "defaults"}, {"$set": upd}, upsert=True)
+    doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
+    return Settings(**doc)
 
 
 app.include_router(api_router)

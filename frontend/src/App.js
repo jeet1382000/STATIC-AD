@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import BrandNew from "./pages/BrandNew";
 import BrandDetail from "./pages/BrandDetail";
 import Templates from "./pages/Templates";
+import Settings from "./pages/Settings";
 import { keysStore } from "./lib/api";
 
 function App() {
@@ -28,6 +29,7 @@ function App() {
             <Route path="/brands/new" element={<BrandNew onOpenKeys={open} />} />
             <Route path="/brands/:id" element={<BrandDetail onOpenKeys={open} />} />
             <Route path="/templates" element={<Templates />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>
         <KeysModal open={keysOpen} onClose={() => setKeysOpen(false)} />
