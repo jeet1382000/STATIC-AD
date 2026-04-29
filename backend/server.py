@@ -137,6 +137,11 @@ class Brand(BaseModel):
     identity: Optional[BrandIdentity] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     cover_color: Optional[str] = None
+    # Derived fields populated by list_brands (defaults so single-brand fetch keeps working)
+    total_ads: int = 0
+    done_ads: int = 0
+    thumb_urls: List[str] = []
+    cost: float = 0.0
 
 
 class AdCreative(BaseModel):
@@ -374,7 +379,19 @@ async def create_brand(payload: BrandCreate):
 @api_router.get("/brands", response_model=List[Brand])
 async def list_brands():
     docs = await db.brands.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    return [Brand(**d) for d in docs]
+    brands: List[Brand] = []
+    for d in docs:
+        b = Brand(**d)
+        latest = await db.ad_runs.find_one({"brand_id": b.id}, {"_id": 0}, sort=[("created_at", -1)])
+        if latest:
+            creatives = latest.get("creatives", [])
+            done = [c for c in creatives if c.get("image_url")]
+            b.total_ads = len(creatives)
+            b.done_ads = len(done)
+            b.thumb_urls = [c["image_url"] for c in done[:3]]
+            b.cost = round(len(done) * 0.12, 2)  # display estimate
+        brands.append(b)
+    return brands
 
 
 @api_router.get("/brands/{brand_id}", response_model=Brand)
