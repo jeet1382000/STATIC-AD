@@ -161,7 +161,7 @@ export default function KeysModal({ open, onClose }) {
             <button
               onClick={onSave}
               disabled={!fal.trim() || !llm.trim()}
-              className="px-5 h-11 bg-[#E52514] text-white hover:bg-black disabled:opacity-40 transition-colors label-mono"
+              className="px-5 h-11 bg-coral hover:bg-coral-deep border border-ink text-black disabled:opacity-40 transition-colors text-sm font-medium"
               data-testid="save-keys-button"
             >
               Save & continue

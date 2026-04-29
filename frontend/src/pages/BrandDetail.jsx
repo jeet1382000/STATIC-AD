@@ -56,7 +56,7 @@ export default function BrandDetail({ onOpenKeys }) {
   const latestRun = runs[0];
 
   return (
-    <div className="max-w-[1440px] mx-auto px-6 md:px-12 py-12">
+    <div className="px-12 py-12 max-w-[1280px]">
       <Link to="/" className="label-mono flex items-center gap-2 hover:text-[#E52514] mb-8" data-testid="back-to-dashboard">
         <ArrowLeft size={14} strokeWidth={1.5} /> Back to workspace
       </Link>
@@ -64,7 +64,7 @@ export default function BrandDetail({ onOpenKeys }) {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 border-t border-black pt-8">
         <div className="lg:col-span-7">
           <div className="label-mono">№ {brand.id.slice(0, 6)} · brand</div>
-          <h1 className="font-display text-5xl md:text-7xl font-black tracking-tighter leading-[0.9] mt-2">{brand.name}</h1>
+          <h1 className="font-display-tight text-6xl md:text-7xl uppercase leading-[0.9] mt-2">{brand.name}</h1>
           <a href={brand.url.startsWith("http") ? brand.url : `https://${brand.url}`} target="_blank" rel="noreferrer" className="font-mono-tech text-sm text-neutral-500 hover:text-[#E52514] mt-3 inline-block">
             ↗ {brand.url}
           </a>
@@ -83,7 +83,7 @@ export default function BrandDetail({ onOpenKeys }) {
           <button
             onClick={() => onGenerate()}
             disabled={generating || !id_}
-            className="flex items-center gap-2 px-5 h-12 bg-[#E52514] text-white hover:bg-black disabled:opacity-40 transition-colors label-mono"
+            className="flex items-center gap-2 px-5 h-12 bg-coral hover:bg-coral-deep text-black disabled:opacity-40 transition-colors text-sm font-medium border border-ink"
             data-testid="generate-button"
           >
             {generating ? <span>Generating<span className="ascii-loader" /></span> : <><Sparkles size={14} strokeWidth={1.5} /> Generate 15</>}
@@ -94,7 +94,7 @@ export default function BrandDetail({ onOpenKeys }) {
       {/* Brand identity card */}
       <section className="mt-16">
         <div className="flex items-center justify-between border-b border-black pb-3 mb-6">
-          <h2 className="font-display text-2xl font-bold tracking-tight">Brand identity</h2>
+            <h2 className="font-display text-2xl uppercase">Brand identity</h2>
           <span className="label-mono">extracted via claude sonnet 4.5</span>
         </div>
 
@@ -103,7 +103,7 @@ export default function BrandDetail({ onOpenKeys }) {
             No identity yet. Run research from the dashboard.
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-px bg-black/10 border border-black/10" data-testid="brand-identity-card">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-px bg-black/10 border border-soft" data-testid="brand-identity-card">
             {/* Palette */}
             <div className="md:col-span-7 bg-white p-8">
               <div className="label-mono mb-3">Palette</div>
@@ -156,7 +156,7 @@ export default function BrandDetail({ onOpenKeys }) {
       {/* Ad creatives grid */}
       <section className="mt-16">
         <div className="flex items-center justify-between border-b border-black pb-3 mb-6">
-          <h2 className="font-display text-2xl font-bold tracking-tight">Ad creatives</h2>
+            <h2 className="font-display text-2xl uppercase">Ad creatives</h2>
           <div className="flex items-center gap-3">
             <span className="label-mono">{latestRun ? `${latestRun.creatives.filter(c => c.image_url).length}/15` : "0/15"}</span>
             {latestRun && (

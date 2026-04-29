@@ -1,4 +1,4 @@
-@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800,900&display=swap');
+@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800,900&f[]=khand@400,500,600,700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 @tailwind base;
@@ -6,7 +6,15 @@
 @tailwind utilities;
 
 :root {
-  --background: 0 0% 100%;
+  --cream: #F4EFE3;
+  --cream-deep: #ECE6D7;
+  --ink: #0A0A0A;
+  --line: #2A2A2A1A;
+  --coral: #F4A8A2;
+  --coral-deep: #ED8E88;
+  --red: #E52514;
+
+  --background: 42 42% 92%;
   --foreground: 0 0% 4%;
   --card: 0 0% 100%;
   --card-foreground: 0 0% 4%;
@@ -14,58 +22,57 @@
   --popover-foreground: 0 0% 4%;
   --primary: 0 0% 4%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 0 0% 96%;
+  --secondary: 42 30% 88%;
   --secondary-foreground: 0 0% 4%;
-  --muted: 0 0% 96%;
-  --muted-foreground: 0 0% 45%;
+  --muted: 42 30% 88%;
+  --muted-foreground: 0 0% 40%;
   --accent: 4 87% 49%;
   --accent-foreground: 0 0% 100%;
   --destructive: 4 87% 49%;
   --destructive-foreground: 0 0% 100%;
-  --border: 0 0% 90%;
-  --input: 0 0% 90%;
+  --border: 0 0% 0% / 0.10;
+  --input: 0 0% 0% / 0.15;
   --ring: 4 87% 49%;
   --radius: 0;
 }
 
-* { border-color: hsl(var(--border)); }
+* { border-color: rgba(0,0,0,0.10); }
 
 html, body {
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
+  background: var(--cream);
+  color: var(--ink);
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-::selection { background: #E52514; color: #fff; }
+::selection { background: var(--red); color: #fff; }
 
 @layer utilities {
-  .font-display { font-family: 'Cabinet Grotesk', 'IBM Plex Sans', sans-serif; font-feature-settings: 'ss01'; }
+  .font-display { font-family: 'Khand', 'Cabinet Grotesk', sans-serif; font-weight: 700; letter-spacing: -0.01em; }
+  .font-display-tight { font-family: 'Khand', 'Cabinet Grotesk', sans-serif; font-weight: 700; letter-spacing: -0.02em; }
   .font-mono-tech { font-family: 'JetBrains Mono', monospace; }
   .label-mono {
     font-family: 'JetBrains Mono', monospace;
     text-transform: uppercase;
-    letter-spacing: 0.2em;
-    font-size: 0.7rem;
-    color: hsl(var(--muted-foreground));
+    letter-spacing: 0.16em;
+    font-size: 0.68rem;
+    color: rgba(0,0,0,0.55);
   }
-  .accent-red { color: #E52514; }
-  .bg-accent-red { background: #E52514; }
-  .border-accent-red { border-color: #E52514; }
-  .grid-lines {
-    background-image: linear-gradient(to right, rgba(0,0,0,0.04) 1px, transparent 1px),
-                      linear-gradient(to bottom, rgba(0,0,0,0.04) 1px, transparent 1px);
-    background-size: 80px 80px;
-  }
+  .accent-red { color: var(--red); }
+  .bg-cream { background: var(--cream); }
+  .bg-cream-deep { background: var(--cream-deep); }
+  .bg-coral { background: var(--coral); }
+  .bg-coral-deep { background: var(--coral-deep); }
+  .text-coral { color: var(--coral-deep); }
+  .border-ink { border-color: var(--ink); }
+  .border-soft { border-color: rgba(0,0,0,0.10); }
 }
 
-/* Force shadcn flat / sharp */
-[data-slot="card"], .card, button, input, textarea, [role="dialog"] {
+[data-slot="card"], .card, button, input, textarea, select, [role="dialog"] {
   border-radius: 0 !important;
 }
 
-/* ASCII loader */
 .ascii-loader::after {
   content: '▓';
   animation: ascii-pulse 0.8s steps(4) infinite;
@@ -83,3 +90,10 @@ html, body {
   to   { opacity: 1; transform: translateY(0); }
 }
 .reveal { animation: scramble-in 0.5s ease-out both; }
+
+.dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: #16A34A; margin-right: 8px; vertical-align: middle;
+}
+.dot.red { background: var(--red); }
+.dot.gray { background: rgba(0,0,0,0.35); }

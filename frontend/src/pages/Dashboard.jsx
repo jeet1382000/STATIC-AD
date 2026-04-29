@@ -17,7 +17,7 @@ export default function Dashboard({ onOpenKeys }) {
     try {
       const r = await api.listBrands();
       setBrands(r.data);
-    } catch (e) {
+    } catch {
       toast.error("Failed to load brands");
     } finally {
       setLoading(false);
@@ -62,30 +62,27 @@ export default function Dashboard({ onOpenKeys }) {
   );
 
   return (
-    <div className="max-w-[1440px] mx-auto px-6 md:px-12 py-12 md:py-20">
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 mb-16">
-        <div className="lg:col-span-7">
-          <div className="label-mono mb-4">№00 · workspace</div>
-          <h1 className="font-display text-5xl md:text-7xl lg:text-8xl font-black tracking-tighter leading-[0.9]">
-            Your<br/>workspaces<span className="text-[#E52514]">.</span>
-          </h1>
-          <p className="text-base md:text-lg text-neutral-700 mt-6 max-w-xl leading-relaxed">
-            Drop a URL. The agent reverse-engineers the brand's visual identity — palette,
-            fonts, photography direction — then generates 15 static ad creatives. Fully automatic.
-          </p>
-        </div>
-        <div className="lg:col-span-5 flex flex-col justify-end">
-          <DropUrlInput onSubmit={onDrop} busy={busy} />
-        </div>
+    <div className="px-12 py-12 max-w-[1280px]">
+      <div className="label-mono mb-3">Workspace · brands</div>
+      <h1 className="font-display-tight text-7xl lg:text-8xl uppercase leading-[0.85]">
+        Static Ad<br/>Studio<span className="text-[#E52514]">.</span>
+      </h1>
+      <p className="text-base text-black/70 mt-6 max-w-2xl leading-relaxed">
+        Reverse-engineer any brand. Ship ads at agency volume. Drop a URL — research,
+        brand DNA, prompt-pack, and 15 production-ready static ads.
+      </p>
+
+      <div className="mt-10 max-w-3xl">
+        <DropUrlInput onSubmit={onDrop} busy={busy} />
       </div>
 
-      <div className="flex items-end justify-between border-t border-black pt-6 mb-8">
-        <div className="flex items-baseline gap-4">
-          <h2 className="font-display text-2xl font-bold tracking-tight">Brands</h2>
-          <span className="label-mono" data-testid="brands-count">{brands.length} total</span>
+      <div className="mt-16 border-t border-ink pt-6 flex items-end justify-between mb-6">
+        <div className="flex items-baseline gap-3">
+          <h2 className="font-display text-2xl uppercase">Your workspaces</h2>
+          <span className="label-mono" data-testid="brands-count">{brands.length}</span>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="label-mono">sort</span>
+        <div className="flex items-center gap-2">
+          <span className="label-mono">Sort ·</span>
           <select
             value={sort}
             onChange={(e) => setSort(e.target.value)}
@@ -95,42 +92,35 @@ export default function Dashboard({ onOpenKeys }) {
             <option value="recent">recent</option>
             <option value="name">name</option>
           </select>
-          <button
-            onClick={() => navigate("/brands/new")}
-            className="label-mono ml-3 hover:text-[#E52514]"
-            data-testid="open-wizard-button"
-          >
-            Or use the full wizard →
-          </button>
         </div>
       </div>
 
       {loading ? (
         <div className="label-mono py-24 text-center">Loading<span className="ascii-loader" /></div>
       ) : sorted.length === 0 ? (
-        <div className="border border-black/10 p-12 md:p-20 grid grid-cols-1 md:grid-cols-2 gap-12 items-center" data-testid="empty-state">
-          <div>
+        <div className="border border-soft bg-white p-12 grid grid-cols-1 md:grid-cols-12 gap-8 items-center" data-testid="empty-state">
+          <div className="md:col-span-7">
             <div className="label-mono mb-3">Empty</div>
-            <h3 className="font-display text-4xl md:text-5xl font-black tracking-tighter leading-none">
-              No brands yet.
-            </h3>
-            <p className="text-neutral-600 mt-4 max-w-md leading-relaxed">
-              Drop a URL above. The agent does the rest.
+            <h3 className="font-display-tight text-5xl uppercase leading-none">No brands yet.</h3>
+            <p className="text-black/60 mt-4 max-w-md leading-relaxed">
+              Drop a URL above. The agent reverse-engineers the whole visual identity — fonts, palette, photography direction — then generates 15 static ad creatives. Fully automatic.
             </p>
+            <button onClick={() => navigate("/brands/new")} className="label-mono text-coral hover:text-[#E52514] mt-4 underline" data-testid="open-wizard-cta">
+              Or use the full wizard →
+            </button>
           </div>
-          <div className="aspect-[4/3] bg-black relative overflow-hidden">
+          <div className="md:col-span-5 aspect-[4/5] bg-cream-deep relative overflow-hidden">
             <img
               src="https://images.unsplash.com/photo-1629922944655-a4c0ae9e07f1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NjV8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwZWRpdG9yaWFsJTIwZmFzaGlvbiUyMHBob3RvZ3JhcGh5fGVufDB8fHx8MTc3NzQ0MTkxNXww&ixlib=rb-4.1.0&q=85"
               alt=""
               className="absolute inset-0 w-full h-full object-cover opacity-90 mix-blend-luminosity"
             />
-            <div className="absolute bottom-3 left-3 label-mono text-white">/ untitled · 00</div>
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" data-testid="brands-grid">
-          {sorted.map((b) => (
-            <BrandCard key={b.id} brand={b} onDelete={onDelete} />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" data-testid="brands-grid">
+          {sorted.map((b, i) => (
+            <BrandCard key={b.id} brand={b} index={i} onDelete={onDelete} />
           ))}
         </div>
       )}
