@@ -56,13 +56,68 @@ class Palette(BaseModel):
     neutral: str
 
 
+class BrandOverview(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    tagline: str = ""
+    design_agency: str = ""
+    voice_adjectives: List[str] = []
+    positioning: str = ""
+    competitive_differentiation: str = ""
+
+
+class VisualSystem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    primary_font: str = ""
+    secondary_font: str = ""
+    primary_color: str = ""
+    secondary_color: str = ""
+    accent_color: str = ""
+    background_colors: str = ""
+    cta_color_and_style: str = ""
+
+
+class PhotographyDirection(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    lighting: str = ""
+    color_grading: str = ""
+    composition: str = ""
+    subject_matter: str = ""
+    props_and_surfaces: str = ""
+    mood: str = ""
+
+
+class ProductDetails(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    physical_description: str = ""
+    label_logo_placement: str = ""
+    distinctive_features: str = ""
+    packaging_system: str = ""
+
+
+class AdCreativeStyle(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    typical_formats: str = ""
+    text_overlay_style: str = ""
+    photo_vs_illustration: str = ""
+    ugc_usage: str = ""
+    offer_presentation: str = ""
+
+
 class BrandIdentity(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     palette: Palette
     fonts: List[str]
     tone: str
     photography_style: str
     brand_voice: str
     keywords: List[str]
+    # Expanded brand DNA (optional for backward compat)
+    brand_overview: Optional[BrandOverview] = None
+    visual_system: Optional[VisualSystem] = None
+    photography_direction: Optional[PhotographyDirection] = None
+    product_details: Optional[ProductDetails] = None
+    ad_creative_style: Optional[AdCreativeStyle] = None
+    image_generation_modifier: str = ""
 
 
 class BrandCreate(BaseModel):
@@ -351,26 +406,64 @@ async def brand_research(brand_id: str, x_anthropic_key: Optional[str] = Header(
 
     system = (
         "You are a senior brand strategist and visual designer. "
-        "Reverse-engineer a brand's visual & verbal identity from a website excerpt. "
+        "Reverse-engineer a brand's full DNA — visual & verbal identity — from a website excerpt. "
         "Always reply with a single valid JSON object — no prose, no markdown."
     )
-    user = f"""Analyze this website and extract its brand identity. Brand name: "{brand.name}".
+    user = f"""Analyze this website and extract the full brand DNA. Brand name: "{brand.name}".
 
-Output ONLY this JSON shape:
+Output ONLY this JSON shape (use empty strings or arrays if a field is unknown — never null):
 {{
   "palette": {{ "primary": "#hex", "secondary": "#hex", "accent": "#hex", "neutral": "#hex" }},
   "fonts": ["Display font", "Body font"],
   "tone": "1-2 sentence description of the verbal tone",
   "photography_style": "1-2 sentence description of the visual / photography direction",
   "brand_voice": "1 sentence on how the brand sounds",
-  "keywords": ["five", "to", "eight", "evocative", "keywords"]
+  "keywords": ["five", "to", "eight", "evocative", "keywords"],
+  "brand_overview": {{
+    "tagline": "their tagline or a representative one-liner",
+    "design_agency": "agency name or 'Unknown'",
+    "voice_adjectives": ["five", "voice", "adjectives"],
+    "positioning": "1-2 sentence positioning statement",
+    "competitive_differentiation": "1-2 sentence on what sets them apart"
+  }},
+  "visual_system": {{
+    "primary_font": "primary font name + weight notes",
+    "secondary_font": "secondary font name + weight notes",
+    "primary_color": "#hex (description)",
+    "secondary_color": "#hex (description)",
+    "accent_color": "#hex (description)",
+    "background_colors": "description of background usage",
+    "cta_color_and_style": "color + button style notes"
+  }},
+  "photography_direction": {{
+    "lighting": "lighting description",
+    "color_grading": "grading description",
+    "composition": "composition rules",
+    "subject_matter": "what is photographed",
+    "props_and_surfaces": "common props and surfaces",
+    "mood": "overall mood"
+  }},
+  "product_details": {{
+    "physical_description": "what the product looks like",
+    "label_logo_placement": "label and logo placement",
+    "distinctive_features": "distinctive product features",
+    "packaging_system": "packaging system description"
+  }},
+  "ad_creative_style": {{
+    "typical_formats": "typical ad formats",
+    "text_overlay_style": "text overlay treatment",
+    "photo_vs_illustration": "balance of photo vs illustration",
+    "ugc_usage": "how UGC is used",
+    "offer_presentation": "how offers are presented"
+  }},
+  "image_generation_modifier": "A single paragraph (~80 words) prompt-modifier to PREPEND to every ad-image prompt. Capture lighting, color grading, palette, type style, mood, and any signature props. Concrete, sensory, image-gen ready."
 }}
 
 Website excerpt:
 \"\"\"
 {site}
 \"\"\""""
-    raw = await _claude_call(api_key, system, user, max_tokens=900)
+    raw = await _claude_call(api_key, system, user, max_tokens=2400)
     try:
         identity = BrandIdentity(**_extract_json(raw))
     except Exception as e:
@@ -413,6 +506,11 @@ async def generate_creatives(
         "Generate prompts that describe the same product type and feel as those photos."
         if brand.product_images else "Reference photos: none."
     )
+    modifier = (brand.identity.image_generation_modifier or "").strip()
+    modifier_line = (
+        f"\n\nIMPORTANT: prepend this exact paragraph to every prompt as the first sentences (verbatim, then your scene):\n\"\"\"{modifier}\"\"\"\n"
+        if modifier else ""
+    )
 
     # Enabled templates drive prompt generation. Fallback: free-form 15.
     await _seed_templates_if_empty()
@@ -435,7 +533,7 @@ async def generate_creatives(
         user = f"""Brand: {brand.name}
 Product: {brand.product_name or "(brand-level campaign)"}
 {angle_line}
-{photos_line}
+{photos_line}{modifier_line}
 
 Brand identity:
 {identity_json}
@@ -479,7 +577,7 @@ Return 15 prompts."""
     for i, p in enumerate(prompts):
         if enabled and i < len(enabled):
             t = enabled[i]
-            creatives.append(AdCreative(prompt=p, aspect=t.aspect, template_name=t.name, template_number=t.number))
+            creatives.append(AdCreative(prompt=p, aspect=t.aspect, template_name=t.name, template_number=t.number, needs_product=t.needs_product))
         else:
             creatives.append(AdCreative(prompt=p, aspect="1:1"))
 
@@ -518,6 +616,49 @@ Return 15 prompts."""
 async def list_runs(brand_id: str):
     docs = await db.ad_runs.find({"brand_id": brand_id}, {"_id": 0}).sort("created_at", -1).to_list(100)
     return [AdRun(**d) for d in docs]
+
+
+@api_router.get("/brands/{brand_id}/download")
+async def download_zip(brand_id: str):
+    """Download all images from the latest ad run as a ZIP."""
+    import io
+    import zipfile
+    from fastapi.responses import StreamingResponse
+
+    brand = await db.brands.find_one({"id": brand_id}, {"_id": 0})
+    if not brand:
+        raise HTTPException(status_code=404, detail="Brand not found")
+    run = await db.ad_runs.find_one({"brand_id": brand_id}, {"_id": 0}, sort=[("created_at", -1)])
+    if not run:
+        raise HTTPException(status_code=404, detail="No ad run found")
+
+    creatives = [c for c in run.get("creatives", []) if c.get("image_url")]
+    if not creatives:
+        raise HTTPException(status_code=404, detail="No images available yet")
+
+    buf = io.BytesIO()
+    async with httpx.AsyncClient(timeout=60.0) as hc:
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for i, c in enumerate(creatives, start=1):
+                try:
+                    r = await hc.get(c["image_url"])
+                    if r.status_code != 200:
+                        continue
+                    name = (c.get("template_name") or f"creative_{i}").replace("/", "-").replace(" ", "_")
+                    fn = f"{i:02d}_{name}.png"
+                    zf.writestr(fn, r.content)
+                except Exception:
+                    continue
+            # also add a prompts.txt
+            prompts_txt = "\n\n".join(
+                f"#{i:02d} {c.get('template_name','')} [{c.get('aspect','')}]\n{c.get('prompt','')}"
+                for i, c in enumerate(run.get("creatives", []), start=1)
+            )
+            zf.writestr("prompts.txt", prompts_txt)
+    buf.seek(0)
+    safe_name = (brand.get("name") or "brand").lower().replace(" ", "-")
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name}-ads.zip"'}
+    return StreamingResponse(buf, media_type="application/zip", headers=headers)
 
 
 # Legacy status routes preserved

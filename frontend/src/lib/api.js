@@ -42,6 +42,7 @@ export const api = {
       timeout: 240000,
     }),
   listRuns: (id) => axios.get(`${API}/brands/${id}/runs`),
+  downloadZipUrl: (id) => `${API}/brands/${id}/download`,
 
   listTemplates: () => axios.get(`${API}/templates`),
   patchTemplate: (id, patch) => axios.patch(`${API}/templates/${id}`, patch),
