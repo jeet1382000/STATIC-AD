@@ -1,8 +1,20 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ArrowLeft, ArrowRight, UploadCloud, X } from "lucide-react";
 import { api, keysStore } from "../lib/api";
+
+const MAX_IMAGES = 5;
+const MAX_BYTES = 800_000; // ~800KB per image
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve({ name: file.name, size: file.size, dataUrl: r.result });
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
 
 export default function BrandNew({ onOpenKeys }) {
   const navigate = useNavigate();
@@ -10,8 +22,11 @@ export default function BrandNew({ onOpenKeys }) {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [product, setProduct] = useState("");
+  const [images, setImages] = useState([]); // {name, dataUrl, size}
   const [angle, setAngle] = useState("");
   const [busy, setBusy] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInput = useRef(null);
 
   const next = () => {
     if (step === 1 && (!name.trim() || !url.trim())) {
@@ -22,6 +37,33 @@ export default function BrandNew({ onOpenKeys }) {
   };
   const back = () => setStep(Math.max(1, step - 1));
 
+  const addFiles = async (files) => {
+    const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (list.length === 0) {
+      toast.error("Only image files are allowed");
+      return;
+    }
+    const slots = MAX_IMAGES - images.length;
+    if (slots <= 0) {
+      toast.error(`Max ${MAX_IMAGES} images`);
+      return;
+    }
+    const taken = list.slice(0, slots);
+    const oversize = taken.find((f) => f.size > MAX_BYTES);
+    if (oversize) {
+      toast.error(`${oversize.name} is over 800KB. Compress first.`);
+      return;
+    }
+    try {
+      const converted = await Promise.all(taken.map(fileToDataUrl));
+      setImages((prev) => [...prev, ...converted]);
+    } catch {
+      toast.error("Failed to read file");
+    }
+  };
+
+  const removeImage = (i) => setImages((prev) => prev.filter((_, idx) => idx !== i));
+
   const finish = async () => {
     if (!keysStore.has()) {
       toast.error("Add your FAL & Anthropic keys first.");
@@ -30,7 +72,12 @@ export default function BrandNew({ onOpenKeys }) {
     }
     setBusy(true);
     try {
-      const created = await api.createBrand({ name, url, product_name: product || null });
+      const created = await api.createBrand({
+        name,
+        url,
+        product_name: product || null,
+        product_images: images.map((i) => i.dataUrl),
+      });
       toast.success("Brand created. Running research…");
       await api.research(created.data.id);
       toast.success("Identity extracted. Generating ads…");
@@ -78,17 +125,65 @@ export default function BrandNew({ onOpenKeys }) {
             <Field label="Product name (optional)" testid="product-name-input" value={product} onChange={setProduct} placeholder="Organic Protein Powder" />
           </div>
         )}
+
         {step === 2 && (
           <div className="space-y-6 reveal">
-            <h2 className="font-display text-2xl uppercase">Confirm details</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Cell k="Brand" v={name} />
-              <Cell k="URL" v={url} mono />
-              <Cell k="Product" v={product || "(brand-level)"} />
-              <Cell k="Image model" v="fal-ai/flux-schnell" mono />
+            <div className="label-mono">Product images (optional, max {MAX_IMAGES})</div>
+
+            <div
+              onClick={() => fileInput.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files);
+              }}
+              className={`cursor-pointer border-2 border-dashed ${dragOver ? "border-[#E52514] bg-[#E52514]/5" : "border-black/30 bg-cream"} hover:border-ink transition-colors py-16 px-8 text-center select-none`}
+              data-testid="image-dropzone"
+            >
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(e) => { if (e.target.files?.length) addFiles(e.target.files); e.target.value = ""; }}
+                className="hidden"
+                data-testid="image-file-input"
+              />
+              <div className="flex flex-col items-center gap-3">
+                <UploadCloud size={36} strokeWidth={1.25} />
+                <div className="font-display text-2xl">Drop product images here</div>
+                <div className="text-sm text-black/55">or click to browse</div>
+                <div className="label-mono mt-1">PNG · JPG · WEBP · max 800KB each</div>
+              </div>
             </div>
+
+            {images.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3" data-testid="image-thumbnails">
+                {images.map((img, i) => (
+                  <div key={i} className="relative aspect-square bg-cream-deep border border-soft group">
+                    <img src={img.dataUrl} alt={img.name} className="w-full h-full object-cover" />
+                    <button
+                      onClick={() => removeImage(i)}
+                      className="absolute top-1 right-1 bg-white border border-ink p-1 opacity-0 group-hover:opacity-100 hover:bg-[#E52514] hover:text-white transition"
+                      data-testid={`remove-image-${i}`}
+                      type="button"
+                    >
+                      <X size={12} strokeWidth={1.5} />
+                    </button>
+                    <div className="absolute bottom-1 left-1 right-1 truncate font-mono-tech text-[10px] bg-white/80 px-1 py-0.5">{img.name}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p className="text-sm text-black/55">
+              Optional reference photos. They give the agent context for the brand's product when generating ad prompts.
+            </p>
           </div>
         )}
+
         {step === 3 && (
           <div className="space-y-6 reveal">
             <h2 className="font-display text-2xl uppercase">Creative angle (optional)</h2>
@@ -103,15 +198,24 @@ export default function BrandNew({ onOpenKeys }) {
                 data-testid="angle-input"
               />
             </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Cell k="Brand" v={name} />
+              <Cell k="URL" v={url} mono />
+              <Cell k="Product" v={product || "(brand-level)"} />
+              <Cell k="Reference photos" v={images.length ? `${images.length} attached` : "—"} />
+            </div>
           </div>
         )}
 
         <div className="flex items-center justify-between pt-6 border-t border-soft">
           {step > 1 ? (
-            <button onClick={back} className="label-mono hover:text-[#E52514]" data-testid="wizard-back-button">← Back</button>
+            <button onClick={back} className="flex items-center gap-2 text-sm hover:text-[#E52514]" data-testid="wizard-back-button">
+              <ArrowLeft size={14} strokeWidth={1.5} /> Back
+            </button>
           ) : <span />}
           {step < 3 ? (
-            <button onClick={next} className="flex items-center gap-2 px-6 h-11 bg-coral hover:bg-coral-deep text-black transition-colors text-sm font-medium" data-testid="wizard-next-button">
+            <button onClick={next} className="flex items-center gap-2 px-6 h-11 bg-[#E52514] hover:bg-black text-white transition-colors text-sm font-medium" data-testid="wizard-next-button">
               Next <ArrowRight size={14} strokeWidth={1.5} />
             </button>
           ) : (

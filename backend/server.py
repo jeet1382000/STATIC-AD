@@ -69,6 +69,7 @@ class BrandCreate(BaseModel):
     name: str
     url: str
     product_name: Optional[str] = None
+    product_images: List[str] = []  # base64 data URLs, max 5
 
 
 class Brand(BaseModel):
@@ -77,6 +78,7 @@ class Brand(BaseModel):
     name: str
     url: str
     product_name: Optional[str] = None
+    product_images: List[str] = []
     identity: Optional[BrandIdentity] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     cover_color: Optional[str] = None
@@ -234,7 +236,13 @@ async def test_fal(x_fal_key: Optional[str] = Header(None)):
 
 @api_router.post("/brands", response_model=Brand)
 async def create_brand(payload: BrandCreate):
-    brand = Brand(name=payload.name.strip(), url=payload.url.strip(), product_name=payload.product_name)
+    images = (payload.product_images or [])[:5]
+    brand = Brand(
+        name=payload.name.strip(),
+        url=payload.url.strip(),
+        product_name=payload.product_name,
+        product_images=images,
+    )
     await db.brands.insert_one(brand.model_dump())
     return brand
 
@@ -331,6 +339,11 @@ async def generate_creatives(
 
     identity_json = json.dumps(brand.identity.model_dump(), indent=2)
     angle_line = f"Creative angle: {payload.angle}" if payload.angle else "Creative angle: open / surprise the user"
+    photos_line = (
+        f"Reference photos: {len(brand.product_images)} product photo(s) provided by the user. "
+        "Generate prompts that describe the same product type and feel as those photos."
+        if brand.product_images else "Reference photos: none."
+    )
 
     system = (
         "You are a world-class art director. Write 15 distinct, vivid, production-ready "
@@ -343,6 +356,7 @@ async def generate_creatives(
     user = f"""Brand: {brand.name}
 Product: {brand.product_name or "(brand-level campaign)"}
 {angle_line}
+{photos_line}
 
 Brand identity:
 {identity_json}
