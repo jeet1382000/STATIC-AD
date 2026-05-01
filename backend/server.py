@@ -677,34 +677,50 @@ Return 15 prompts."""
         else:
             creatives.append(AdCreative(prompt=p, aspect="1:1"))
 
-    run = AdRun(brand_id=brand_id, creatives=creatives)
+    run = AdRun(brand_id=brand_id, creatives=creatives, status="running")
     await db.ad_runs.insert_one(run.model_dump())
 
-    # ── Step 3: Generate images with gpt-image-1 concurrently ──
+    # ── Step 3: Fire-and-forget — generate images with gpt-image-1 in background ──
+    # Returns immediately; frontend polls /runs for real-time progress.
     settings_doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
     settings = Settings(**settings_doc) if settings_doc else Settings()
     oai_quality = QUALITY_TO_OAI.get(settings.quality, "medium")
 
-    sem = asyncio.Semaphore(3)  # gpt-image-1 is slower; cap concurrency at 3
+    asyncio.create_task(_generate_images_background(run.id, list(run.creatives), o_key, oai_quality))
+
+    return run
+
+
+async def _generate_images_background(run_id: str, creatives: List[AdCreative], o_key: str, quality: str):
+    """Background task: generate images with gpt-image-1, update each creative in MongoDB as it completes."""
+    sem = asyncio.Semaphore(4)
 
     async def worker(creative: AdCreative):
         size = _aspect_to_openai_size(creative.aspect)
         async with sem:
-            res = await _openai_generate(o_key, creative.prompt, size=size, quality=oai_quality)
+            res = await _openai_generate(o_key, creative.prompt, size=size, quality=quality)
         if "url" in res:
-            creative.image_url = res["url"]
+            await db.ad_runs.update_one(
+                {"id": run_id, "creatives.id": creative.id},
+                {"$set": {"creatives.$.image_url": res["url"]}},
+            )
+            logger.info("Image done: run=%s creative=%s", run_id, creative.id)
         else:
-            creative.error = res.get("error", "unknown")
-        return creative
+            err = res.get("error", "unknown")
+            await db.ad_runs.update_one(
+                {"id": run_id, "creatives.id": creative.id},
+                {"$set": {"creatives.$.error": err}},
+            )
+            logger.warning("Image failed: run=%s creative=%s err=%s", run_id, creative.id, err)
 
-    run.creatives = await asyncio.gather(*(worker(c) for c in run.creatives))
-    run.status = "done" if any(c.image_url for c in run.creatives) else "failed"
+    await asyncio.gather(*(worker(c) for c in creatives))
 
-    await db.ad_runs.update_one(
-        {"id": run.id},
-        {"$set": {"creatives": [c.model_dump() for c in run.creatives], "status": run.status}},
-    )
-    return run
+    updated = await db.ad_runs.find_one({"id": run_id}, {"_id": 0})
+    if updated:
+        done_count = sum(1 for c in updated.get("creatives", []) if c.get("image_url"))
+        status = "done" if done_count > 0 else "failed"
+        await db.ad_runs.update_one({"id": run_id}, {"$set": {"status": status}})
+        logger.info("Run %s finished: %d/%d images, status=%s", run_id, done_count, len(creatives), status)
 
 
 @api_router.get("/brands/{brand_id}/runs", response_model=List[AdRun])

@@ -4,7 +4,7 @@ import { ArrowLeft, Download, RefreshCw, Sparkles, FileJson, ChevronDown } from 
 import { toast } from "sonner";
 import { api, keysStore } from "../lib/api";
 
-const COST_PER_IMAGE = 0.003; // fal flux/schnell rough estimate
+const COST_PER_IMAGE = 0.04; // gpt-image-1 medium quality estimate
 
 export default function BrandDetail({ onOpenKeys }) {
   const { id } = useParams();
@@ -48,16 +48,48 @@ export default function BrandDetail({ onOpenKeys }) {
     }
   };
 
+  const pollUntilDone = async (runId) => {
+    const maxMs = 12 * 60 * 1000; // 12 minutes max
+    const start = Date.now();
+    let lastDone = -1;
+    while (Date.now() - start < maxMs) {
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const { data: freshRuns } = await api.listRuns(id);
+        const run = freshRuns.find((r) => r.id === runId);
+        if (!run) continue;
+        setRuns(freshRuns);
+        const done = run.creatives.filter((c) => c.image_url).length;
+        const total = run.creatives.length;
+        if (done !== lastDone) {
+          log(`↻ ${done}/${total} images rendered with gpt-image-1`);
+          setPhaseMsg(`Rendering images… ${done}/${total}`);
+          lastDone = done;
+        }
+        if (run.status === "done" || run.status === "failed") return;
+        if (run.creatives.every((c) => c.image_url || c.error)) return;
+      } catch {
+        // ignore transient polling errors
+      }
+    }
+  };
+
   const onGenerate = async (angleArg) => {
     if (!keysStore.has()) { toast.error("Add your keys first."); onOpenKeys(); return; }
     setGenerating(true);
     try {
-      log("№02 Prompts — Claude generating filled prompts");
-      log("№03 Images — fal.ai rendering creatives in parallel");
-      setPhaseMsg("Generating prompts & rendering images…");
-      await api.generate(id, angleArg ?? angle);
+      log("№01 Vision — Claude 4.6 analyzing product photos");
+      log("№02 Prompts — Claude 4.6 writing ad prompts for your product");
+      setPhaseMsg("Analyzing product & generating prompts…");
+      const response = await api.generate(id, angleArg ?? angle);
+      const runData = response.data;
+      setRuns((prev) => [runData, ...prev.filter((r) => r.id !== runData.id)]);
+      log(`✓ ${runData.creatives.length} prompts ready — rendering images with gpt-image-1`);
+      log("№03 Images — gpt-image-1 rendering creatives in parallel");
+      setPhaseMsg("Rendering images with gpt-image-1…");
+      await pollUntilDone(runData.id);
       log("✓ All done. Ready to download.");
-      toast.success("Creatives generated.");
+      toast.success("All creatives generated.");
       await load();
     } catch (e) {
       log(`× Generation failed: ${e?.response?.data?.detail || e.message}`);
