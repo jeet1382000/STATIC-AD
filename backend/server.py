@@ -43,7 +43,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("ads-studio")
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
-OPENAI_IMAGE_MODEL = "gpt-image-1"
+OPENAI_IMAGE_MODEL = "gpt-image-2"
 
 
 # =============== Models ===============
@@ -285,7 +285,7 @@ async def _claude_call(api_key: str, system: str, user: str, max_tokens: int = 1
 
 
 async def _openai_generate(openai_key: str, prompt: str, size: str = "1024x1024", quality: str = "medium") -> dict:
-    """Call OpenAI gpt-image-1 to generate one image. Saves PNG to IMAGES_DIR. Returns {url} or {error}."""
+    """Call OpenAI gpt-image-2 to generate one image. Saves PNG to IMAGES_DIR. Returns {url} or {error}."""
     headers = {
         "Authorization": f"Bearer {openai_key}",
         "Content-Type": "application/json",
@@ -323,14 +323,20 @@ async def _openai_generate(openai_key: str, prompt: str, size: str = "1024x1024"
 
 
 def _aspect_to_openai_size(aspect: str) -> str:
-    """Map human aspect string to gpt-image-1 supported sizes: 1024x1024 | 1024x1536 | 1536x1024."""
+    """Map human aspect string to gpt-image-2 supported sizes.
+    Presets: 1024x1024 | 1024x1536 | 1536x1024 | 2048x2048 | 2048x1152 | 2048x1536
+    """
     a = (aspect or "1:1").strip()
     if a == "1:1":
         return "1024x1024"
-    if a in ("9:16", "4:5"):
-        return "1024x1536"   # portrait
-    if a in ("16:9", "4:3"):
-        return "1536x1024"   # landscape
+    if a == "4:5":
+        return "1024x1280"   # ~4:5 portrait (multiples of 16, within limits)
+    if a == "9:16":
+        return "1024x1536"   # portrait 2:3 (closest native preset)
+    if a == "16:9":
+        return "2048x1152"   # native 16:9 at 2K — gpt-image-2 preset
+    if a == "4:3":
+        return "1536x1024"   # landscape 3:2
     return "1024x1024"
 
 
@@ -680,7 +686,7 @@ Return 15 prompts."""
     run = AdRun(brand_id=brand_id, creatives=creatives, status="running")
     await db.ad_runs.insert_one(run.model_dump())
 
-    # ── Step 3: Fire-and-forget — generate images with gpt-image-1 in background ──
+    # ── Step 3: Fire-and-forget — generate images with gpt-image-2 in background ──
     # Returns immediately; frontend polls /runs for real-time progress.
     settings_doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
     settings = Settings(**settings_doc) if settings_doc else Settings()
@@ -692,7 +698,7 @@ Return 15 prompts."""
 
 
 async def _generate_images_background(run_id: str, creatives: List[AdCreative], o_key: str, quality: str):
-    """Background task: generate images with gpt-image-1, update each creative in MongoDB as it completes."""
+    """Background task: generate images with gpt-image-2, update each creative in MongoDB as it completes."""
     sem = asyncio.Semaphore(4)
 
     async def worker(creative: AdCreative):

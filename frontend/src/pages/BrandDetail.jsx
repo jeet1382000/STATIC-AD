@@ -4,7 +4,7 @@ import { ArrowLeft, Download, RefreshCw, Sparkles, FileJson, ChevronDown } from 
 import { toast } from "sonner";
 import { api, keysStore } from "../lib/api";
 
-const COST_PER_IMAGE = 0.04; // gpt-image-1 medium quality estimate
+const COST_PER_IMAGE = 0.053; // gpt-image-2 medium quality at 1024x1024
 
 export default function BrandDetail({ onOpenKeys }) {
   const { id } = useParams();
@@ -62,7 +62,7 @@ export default function BrandDetail({ onOpenKeys }) {
         const done = run.creatives.filter((c) => c.image_url).length;
         const total = run.creatives.length;
         if (done !== lastDone) {
-          log(`↻ ${done}/${total} images rendered with gpt-image-1`);
+          log(`↻ ${done}/${total} images rendered with gpt-image-2`);
           setPhaseMsg(`Rendering images… ${done}/${total}`);
           lastDone = done;
         }
@@ -84,9 +84,9 @@ export default function BrandDetail({ onOpenKeys }) {
       const response = await api.generate(id, angleArg ?? angle);
       const runData = response.data;
       setRuns((prev) => [runData, ...prev.filter((r) => r.id !== runData.id)]);
-      log(`✓ ${runData.creatives.length} prompts ready — rendering images with gpt-image-1`);
-      log("№03 Images — gpt-image-1 rendering creatives in parallel");
-      setPhaseMsg("Rendering images with gpt-image-1…");
+      log(`✓ ${runData.creatives.length} prompts ready — rendering images with gpt-image-2`);
+      log("№03 Images — gpt-image-2 rendering creatives in parallel");
+      setPhaseMsg("Rendering images with gpt-image-2…");
       await pollUntilDone(runData.id);
       log("✓ All done. Ready to download.");
       toast.success("All creatives generated.");

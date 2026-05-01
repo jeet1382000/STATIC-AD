@@ -96,7 +96,7 @@ export default function KeysModal({ open, onClose }) {
                 {showOpenai ? <EyeOff size={14} strokeWidth={1.5} /> : <Eye size={14} strokeWidth={1.5} />}
               </button>
             </div>
-            <div className="label-mono">Powers image generation (gpt-image-1).</div>
+            <div className="label-mono">Powers image generation (gpt-image-2).</div>
           </div>
 
           {/* Anthropic key */}
