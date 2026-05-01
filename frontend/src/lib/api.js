@@ -5,31 +5,31 @@ export const API = `${BACKEND_URL}/api`;
 
 const KEYS_NS = "sas";
 export const keysStore = {
-  get fal() { return localStorage.getItem(`${KEYS_NS}.fal_key`) || ""; },
+  get openai() { return localStorage.getItem(`${KEYS_NS}.openai_key`) || ""; },
   get llm() { return localStorage.getItem(`${KEYS_NS}.llm_key`) || ""; },
-  set(falKey, llmKey) {
-    if (falKey !== undefined) localStorage.setItem(`${KEYS_NS}.fal_key`, falKey);
+  set(openaiKey, llmKey) {
+    if (openaiKey !== undefined) localStorage.setItem(`${KEYS_NS}.openai_key`, openaiKey);
     if (llmKey !== undefined) localStorage.setItem(`${KEYS_NS}.llm_key`, llmKey);
   },
   clear() {
-    localStorage.removeItem(`${KEYS_NS}.fal_key`);
+    localStorage.removeItem(`${KEYS_NS}.openai_key`);
     localStorage.removeItem(`${KEYS_NS}.llm_key`);
   },
-  has() { return !!(localStorage.getItem(`${KEYS_NS}.fal_key`) && localStorage.getItem(`${KEYS_NS}.llm_key`)); },
+  has() { return !!(localStorage.getItem(`${KEYS_NS}.openai_key`) && localStorage.getItem(`${KEYS_NS}.llm_key`)); },
 };
 
 function authHeaders() {
   return {
     "X-Anthropic-Key": keysStore.llm,
-    "X-FAL-Key": keysStore.fal,
+    "X-OpenAI-Key": keysStore.openai,
   };
 }
 
 export const api = {
   testAnthropic: () =>
     axios.post(`${API}/keys/test-anthropic`, null, { headers: authHeaders() }),
-  testFal: () =>
-    axios.post(`${API}/keys/test-fal`, null, { headers: authHeaders() }),
+  testOpenAI: () =>
+    axios.post(`${API}/keys/test-openai`, null, { headers: authHeaders() }),
 
   listBrands: () => axios.get(`${API}/brands`),
   getBrand: (id) => axios.get(`${API}/brands/${id}`),

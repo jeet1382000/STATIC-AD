@@ -4,10 +4,10 @@
 > https://this-project-demo.preview.emergentagent.com/ — can you build an app similar to above
 
 ## Architecture
-- **Backend**: FastAPI + MongoDB (motor). All routes prefixed `/api`. Per-request BYOK headers `X-Anthropic-Key`, `X-FAL-Key` (never persisted).
+- **Backend**: FastAPI + MongoDB (motor). All routes prefixed `/api`. Per-request BYOK headers `X-Anthropic-Key`, `X-OpenAI-Key` (never persisted).
 - **Frontend**: React + Tailwind + Shadcn (rounded-none overrides). Sidebar layout, cream background, coral/red accents, Khand display + IBM Plex Sans + JetBrains Mono.
-- **Integrations**: Anthropic Claude Sonnet 4.5 (`claude-sonnet-4-5-20250929`) for brand research + prompt generation; fal.ai (`fal-ai/flux/schnell`) for image generation. BYOK pattern (localStorage `sas.fal_key` / `sas.llm_key`).
-- **Persistence**: `brands` and `ad_runs` collections in MongoDB.
+- **Integrations**: Anthropic Claude Sonnet 4.6 (`claude-sonnet-4-6`) for brand research + prompt generation + product vision analysis; OpenAI (`gpt-image-1`) for image generation. BYOK pattern (localStorage `sas.openai_key` / `sas.llm_key`).
+- **Persistence**: `brands` and `ad_runs` collections in MongoDB. Generated images stored in `/backend/static/images/`, served at `/api/images/{filename}`.
 
 ## User Personas
 - Performance marketers / growth teams who need to ship 15+ ad variations/day per brand.

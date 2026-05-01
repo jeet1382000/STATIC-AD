@@ -4,16 +4,16 @@ import { api, keysStore } from "../lib/api";
 import { toast } from "sonner";
 
 export default function KeysModal({ open, onClose }) {
-  const [fal, setFal] = useState("");
+  const [openai, setOpenai] = useState("");
   const [llm, setLlm] = useState("");
-  const [showFal, setShowFal] = useState(false);
+  const [showOpenai, setShowOpenai] = useState(false);
   const [showLlm, setShowLlm] = useState(false);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState(null);
 
   useEffect(() => {
     if (open) {
-      setFal(keysStore.fal);
+      setOpenai(keysStore.openai);
       setLlm(keysStore.llm);
       setResult(null);
     }
@@ -22,13 +22,13 @@ export default function KeysModal({ open, onClose }) {
   if (!open) return null;
 
   const onTest = async () => {
-    keysStore.set(fal.trim(), llm.trim());
+    keysStore.set(openai.trim(), llm.trim());
     setTesting(true);
     setResult(null);
     try {
       const r1 = await api.testAnthropic();
-      const r2 = await api.testFal();
-      setResult({ ok: true, anthropic: r1.data, fal: r2.data });
+      const r2 = await api.testOpenAI();
+      setResult({ ok: true, anthropic: r1.data, openai: r2.data });
       toast.success("Both keys validated.");
     } catch (e) {
       const msg = e?.response?.data?.detail || e.message;
@@ -40,14 +40,14 @@ export default function KeysModal({ open, onClose }) {
   };
 
   const onSave = () => {
-    keysStore.set(fal.trim(), llm.trim());
+    keysStore.set(openai.trim(), llm.trim());
     toast.success("Keys saved locally.");
     onClose();
   };
 
   const onClear = () => {
     keysStore.clear();
-    setFal("");
+    setOpenai("");
     setLlm("");
     setResult(null);
     toast("Keys cleared.");
@@ -68,35 +68,35 @@ export default function KeysModal({ open, onClose }) {
 
         <div className="px-8 py-6 space-y-6">
           <p className="text-sm leading-relaxed text-neutral-700 max-w-prose">
-            Plug in your FAL & Anthropic keys. This studio runs on your credentials — they live in this browser only and are <strong>never stored on the server</strong>. Each pipeline run bills your accounts directly.
+            Plug in your OpenAI & Anthropic keys. This studio runs on your credentials — they live in this browser only and are <strong>never stored on the server</strong>. Each pipeline run bills your accounts directly.
           </p>
 
-          {/* FAL key */}
+          {/* OpenAI key */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="label-mono">FAL API key</label>
-              <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noreferrer" className="label-mono hover:text-black flex items-center gap-1">
+              <label className="label-mono">OpenAI API key</label>
+              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="label-mono hover:text-black flex items-center gap-1">
                 Get one <ExternalLink size={12} strokeWidth={1.5} />
               </a>
             </div>
             <div className="flex">
               <input
-                type={showFal ? "text" : "password"}
-                value={fal}
-                onChange={(e) => setFal(e.target.value)}
-                placeholder="key:hex…"
+                type={showOpenai ? "text" : "password"}
+                value={openai}
+                onChange={(e) => setOpenai(e.target.value)}
+                placeholder="sk-…"
                 className="flex-1 h-12 px-4 border border-black/20 focus:border-[var(--red)] focus:outline-none font-mono-tech text-sm bg-white"
-                data-testid="fal-key-input"
+                data-testid="openai-key-input"
               />
               <button
-                onClick={() => setShowFal((s) => !s)}
+                onClick={() => setShowOpenai((s) => !s)}
                 className="w-12 border border-l-0 border-black/20 hover:border-black flex items-center justify-center"
-                data-testid="toggle-fal-visibility"
+                data-testid="toggle-openai-visibility"
               >
-                {showFal ? <EyeOff size={14} strokeWidth={1.5} /> : <Eye size={14} strokeWidth={1.5} />}
+                {showOpenai ? <EyeOff size={14} strokeWidth={1.5} /> : <Eye size={14} strokeWidth={1.5} />}
               </button>
             </div>
-            <div className="label-mono">Powers fal.ai image generation.</div>
+            <div className="label-mono">Powers image generation (gpt-image-1).</div>
           </div>
 
           {/* Anthropic key */}
@@ -124,7 +124,7 @@ export default function KeysModal({ open, onClose }) {
                 {showLlm ? <EyeOff size={14} strokeWidth={1.5} /> : <Eye size={14} strokeWidth={1.5} />}
               </button>
             </div>
-            <div className="label-mono">Powers brand research & prompt generation (Claude Sonnet 4.5).</div>
+            <div className="label-mono">Powers brand research & prompt generation (Claude Sonnet 4.6).</div>
           </div>
 
           {result && (
@@ -137,7 +137,7 @@ export default function KeysModal({ open, onClose }) {
           )}
 
           <div className="text-[11px] font-mono-tech leading-relaxed text-neutral-500 border-l-2 border-[var(--red)] pl-3">
-            Stored locally as <code>localStorage.sas.fal_key</code> & <code>.llm_key</code>. Clear them anytime.
+            Stored locally as <code>localStorage.sas.openai_key</code> & <code>.llm_key</code>. Clear them anytime.
           </div>
         </div>
 
@@ -152,7 +152,7 @@ export default function KeysModal({ open, onClose }) {
           <div className="flex items-center gap-3">
             <button
               onClick={onTest}
-              disabled={testing || !fal.trim() || !llm.trim()}
+              disabled={testing || !openai.trim() || !llm.trim()}
               className="px-5 h-11 border border-black hover:bg-black hover:text-white disabled:opacity-40 transition-colors label-mono"
               data-testid="test-keys-button"
             >
@@ -160,7 +160,7 @@ export default function KeysModal({ open, onClose }) {
             </button>
             <button
               onClick={onSave}
-              disabled={!fal.trim() || !llm.trim()}
+              disabled={!openai.trim() || !llm.trim()}
               className="px-5 h-11 bg-coral hover:bg-coral-deep border border-ink text-black disabled:opacity-40 transition-colors text-sm font-medium"
               data-testid="save-keys-button"
             >

@@ -1,10 +1,11 @@
 """Ads Studio backend.
 
-BYOK: API keys for Anthropic + fal.ai are sent per-request in headers
-(X-Anthropic-Key, X-FAL-Key). Never persisted on the server.
+BYOK: API keys for Anthropic + OpenAI are sent per-request in headers
+(X-Anthropic-Key, X-OpenAI-Key). Never persisted on the server.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.cors import CORSMiddleware
@@ -30,14 +32,18 @@ mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
+# Local directory for storing generated images
+IMAGES_DIR = ROOT_DIR / "static" / "images"
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
 app = FastAPI(title="Ads Studio API")
 api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ads-studio")
 
-CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
-FAL_MODEL = "fal-ai/flux/schnell"  # fast 4-step model, ~2s per image
+CLAUDE_MODEL = "claude-sonnet-4-6"
+OPENAI_IMAGE_MODEL = "gpt-image-1"
 
 
 # =============== Models ===============
@@ -217,10 +223,10 @@ def _require_anthropic_key(x_anthropic_key: Optional[str]) -> str:
     return x_anthropic_key.strip()
 
 
-def _require_fal_key(x_fal_key: Optional[str]) -> str:
-    if not x_fal_key or not x_fal_key.strip():
-        raise HTTPException(status_code=401, detail="Missing FAL API key")
-    return x_fal_key.strip()
+def _require_openai_key(x_openai_key: Optional[str]) -> str:
+    if not x_openai_key or not x_openai_key.strip():
+        raise HTTPException(status_code=401, detail="Missing OpenAI API key")
+    return x_openai_key.strip()
 
 
 async def _scrape_url(url: str) -> str:
@@ -278,51 +284,103 @@ async def _claude_call(api_key: str, system: str, user: str, max_tokens: int = 1
     return await asyncio.to_thread(_run)
 
 
-async def _fal_generate(fal_key: str, prompt: str, image_size=None, num_inference_steps: int = 4) -> dict:
-    """Call fal.ai sync endpoint to generate one image. Returns dict {url} or {error}.
-
-    image_size: either a string enum (e.g. "square_hd") or a dict {"width": int, "height": int}.
-    """
+async def _openai_generate(openai_key: str, prompt: str, size: str = "1024x1024", quality: str = "medium") -> dict:
+    """Call OpenAI gpt-image-1 to generate one image. Saves PNG to IMAGES_DIR. Returns {url} or {error}."""
     headers = {
-        "Authorization": f"Key {fal_key}",
+        "Authorization": f"Bearer {openai_key}",
         "Content-Type": "application/json",
     }
     payload = {
+        "model": OPENAI_IMAGE_MODEL,
         "prompt": prompt,
-        "image_size": image_size or "square_hd",
-        "num_inference_steps": max(1, min(int(num_inference_steps), 12)),
-        "num_images": 1,
-        "enable_safety_checker": True,
+        "n": 1,
+        "size": size,
+        "quality": quality,
     }
     try:
-        async with httpx.AsyncClient(timeout=90.0) as hc:
-            resp = await hc.post(f"https://fal.run/{FAL_MODEL}", headers=headers, json=payload)
+        async with httpx.AsyncClient(timeout=120.0) as hc:
+            resp = await hc.post("https://api.openai.com/v1/images/generations", headers=headers, json=payload)
             if resp.status_code != 200:
-                return {"error": f"fal {resp.status_code}: {resp.text[:160]}"}
+                try:
+                    error_detail = resp.json().get("error", {}).get("message", resp.text[:200])
+                except Exception:
+                    error_detail = resp.text[:200]
+                return {"error": f"OpenAI {resp.status_code}: {error_detail}"}
             data = resp.json()
-            images = data.get("images") or []
-            if not images:
+            image_data = data.get("data", [])
+            if not image_data:
                 return {"error": "no image returned"}
-            return {"url": images[0]["url"]}
+            b64_data = image_data[0].get("b64_json")
+            if not b64_data:
+                return {"error": "no b64_json in response"}
+            image_bytes = base64.b64decode(b64_data)
+            image_id = str(uuid.uuid4()) + ".png"
+            image_path = IMAGES_DIR / image_id
+            await asyncio.to_thread(image_path.write_bytes, image_bytes)
+            return {"url": f"/api/images/{image_id}"}
     except Exception as e:
-        return {"error": f"fal request failed: {str(e)[:160]}"}
+        return {"error": f"OpenAI image generation failed: {str(e)[:200]}"}
 
 
-def _aspect_to_image_size(aspect: str):
-    """Map a human aspect string to fal flux/schnell image_size."""
+def _aspect_to_openai_size(aspect: str) -> str:
+    """Map human aspect string to gpt-image-1 supported sizes: 1024x1024 | 1024x1536 | 1536x1024."""
     a = (aspect or "1:1").strip()
     if a == "1:1":
-        return "square_hd"
-    if a == "9:16":
-        return "portrait_16_9"
-    if a == "16:9":
-        return "landscape_16_9"
-    if a == "4:3":
-        return "landscape_4_3"
-    if a == "4:5":
-        # custom — flux requires width/height divisible by 16 (832/1040 ≈ 4:5)
-        return {"width": 832, "height": 1040}
-    return "square_hd"
+        return "1024x1024"
+    if a in ("9:16", "4:5"):
+        return "1024x1536"   # portrait
+    if a in ("16:9", "4:3"):
+        return "1536x1024"   # landscape
+    return "1024x1024"
+
+
+async def _claude_vision_analyze(api_key: str, product_images: List[str]) -> str:
+    """Use Claude Vision to analyze uploaded product images and return a detailed product description."""
+    if not product_images:
+        return ""
+    content = []
+    for img_data_url in product_images[:3]:  # max 3 images for context
+        if img_data_url.startswith("data:"):
+            match = re.match(r"data:([^;]+);base64,(.+)", img_data_url, re.DOTALL)
+            if match:
+                media_type = match.group(1)
+                b64_data = match.group(2).strip()
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": b64_data,
+                    },
+                })
+    if not content:
+        return ""
+    content.append({
+        "type": "text",
+        "text": (
+            "You are a product photography and packaging expert. Analyze this product image (or images) "
+            "and describe the product in precise, visual detail for use in AI image-generation prompts. "
+            "Cover: exact colors and finishes, shape and silhouette, label/logo style and placement, "
+            "packaging material and texture, distinctive visual features, and any visible text or graphics. "
+            "Be specific and concrete — 3–4 sentences. This description will be embedded verbatim into "
+            "ad creative generation prompts so every generated image accurately depicts this product."
+        ),
+    })
+
+    def _run():
+        c = anthropic.Anthropic(api_key=api_key)
+        msg = c.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=400,
+            messages=[{"role": "user", "content": content}],
+        )
+        return msg.content[0].text
+
+    try:
+        return await asyncio.to_thread(_run)
+    except Exception as e:
+        logger.warning("Product vision analysis failed: %s", e)
+        return ""
 
 
 # =============== Routes ===============
@@ -344,23 +402,20 @@ async def test_anthropic(x_anthropic_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=400, detail=f"Anthropic test failed: {str(e)[:160]}")
 
 
-@api_router.post("/keys/test-fal")
-async def test_fal(x_fal_key: Optional[str] = Header(None)):
-    key = _require_fal_key(x_fal_key)
-    # Submit an empty body to the queue endpoint. fal validates auth before body schema,
-    # so an invalid key returns 401 while a valid key returns 422 (validation error).
-    headers = {"Authorization": f"Key {key}", "Content-Type": "application/json"}
+@api_router.post("/keys/test-openai")
+async def test_openai(x_openai_key: Optional[str] = Header(None)):
+    key = _require_openai_key(x_openai_key)
+    headers = {"Authorization": f"Bearer {key}"}
     try:
         async with httpx.AsyncClient(timeout=15.0) as hc:
-            resp = await hc.post(f"https://queue.fal.run/{FAL_MODEL}", headers=headers, json={})
+            resp = await hc.get("https://api.openai.com/v1/models", headers=headers)
         if resp.status_code in (401, 403):
-            raise HTTPException(status_code=401, detail="Invalid FAL key")
-        # Anything else (200, 422, 400) means auth was accepted.
-        return {"ok": True, "model": FAL_MODEL}
+            raise HTTPException(status_code=401, detail="Invalid OpenAI key")
+        return {"ok": True, "model": OPENAI_IMAGE_MODEL}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"FAL test failed: {str(e)[:160]}")
+        raise HTTPException(status_code=400, detail=f"OpenAI test failed: {str(e)[:160]}")
 
 
 @api_router.post("/brands", response_model=Brand)
@@ -504,10 +559,10 @@ async def generate_creatives(
     brand_id: str,
     payload: GenerateRequest,
     x_anthropic_key: Optional[str] = Header(None),
-    x_fal_key: Optional[str] = Header(None),
+    x_openai_key: Optional[str] = Header(None),
 ):
     a_key = _require_anthropic_key(x_anthropic_key)
-    f_key = _require_fal_key(x_fal_key)
+    o_key = _require_openai_key(x_openai_key)
 
     doc = await db.brands.find_one({"id": brand_id}, {"_id": 0})
     if not doc:
@@ -516,20 +571,40 @@ async def generate_creatives(
     if not brand.identity:
         raise HTTPException(status_code=400, detail="Run brand research first")
 
+    # ── Step 1: Claude Vision — analyze product images if present ──
+    product_visual_description = ""
+    if brand.product_images:
+        logger.info("Running product vision analysis for brand %s (%d images)", brand.id, len(brand.product_images))
+        product_visual_description = await _claude_vision_analyze(a_key, brand.product_images)
+        if product_visual_description:
+            logger.info("Product vision: %s", product_visual_description[:120])
+
     identity_json = json.dumps(brand.identity.model_dump(), indent=2)
     angle_line = f"Creative angle: {payload.angle}" if payload.angle else "Creative angle: open / surprise the user"
-    photos_line = (
-        f"Reference photos: {len(brand.product_images)} product photo(s) provided by the user. "
-        "Generate prompts that describe the same product type and feel as those photos."
-        if brand.product_images else "Reference photos: none."
-    )
+
+    # Build the product reference block for prompt generation
+    if product_visual_description:
+        photos_line = (
+            f"Product visual description (from uploaded photos — use this to depict the product accurately):\n"
+            f"\"\"\"{product_visual_description}\"\"\"\n"
+            f"There are {len(brand.product_images)} reference photo(s). Every prompt that features the product "
+            f"MUST faithfully describe it as specified above."
+        )
+    elif brand.product_images:
+        photos_line = (
+            f"Reference photos: {len(brand.product_images)} product photo(s) provided. "
+            "Generate prompts that describe the same product type and feel."
+        )
+    else:
+        photos_line = "Reference photos: none."
+
     modifier = (brand.identity.image_generation_modifier or "").strip()
     modifier_line = (
         f"\n\nIMPORTANT: prepend this exact paragraph to every prompt as the first sentences (verbatim, then your scene):\n\"\"\"{modifier}\"\"\"\n"
         if modifier else ""
     )
 
-    # Enabled templates drive prompt generation. Fallback: free-form 15.
+    # ── Step 2: Claude writes prompts from templates ──
     await _seed_templates_if_empty()
     tpl_docs = await db.templates.find({"enabled": True}, {"_id": 0}).sort("number", 1).to_list(20)
     enabled = [Template(**d) for d in tpl_docs][:15]
@@ -541,11 +616,13 @@ async def generate_creatives(
             for t in enabled
         )
         system = (
-            "You are a world-class art director. For each provided template scaffold, write ONE vivid, "
-            "production-ready image-generation prompt (40-80 words, single paragraph) that adapts the scaffold "
-            "to the brand's palette, photography style, and tone. Describe a concrete scene: subject, composition, "
-            "lighting, mood. Avoid any rendered text in the image. "
-            "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]} preserving the order of templates."
+            "You are a world-class art director specialising in performance ad creatives. "
+            "For each provided template scaffold, write ONE vivid, production-ready image-generation "
+            "prompt (40-80 words, single paragraph) that adapts the scaffold to the brand's palette, "
+            "photography style, and tone. When a product visual description is provided, your prompt "
+            "MUST describe that exact product — its colors, shape, label, and distinctive features. "
+            "Describe a concrete scene: subject, composition, lighting, mood. Avoid rendered text in the image. "
+            "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]} preserving template order."
         )
         user = f"""Brand: {brand.name}
 Product: {brand.product_name or "(brand-level campaign)"}
@@ -562,10 +639,11 @@ Return exactly {len(enabled)} prompts, in the same order as the templates above.
         target_count = len(enabled)
     else:
         system = (
-            "You are a world-class art director. Write 15 distinct, vivid, production-ready "
-            "image-generation prompts for static social ad creatives. Every prompt must be a "
-            "single paragraph (40-80 words), reference the brand's palette, photography style, "
-            "and tone, and describe a concrete scene with subject, composition, lighting, and mood. "
+            "You are a world-class art director specialising in performance ad creatives. "
+            "Write 15 distinct, vivid, production-ready image-generation prompts for static social ad creatives. "
+            "Every prompt must be a single paragraph (40-80 words), reference the brand's palette, photography "
+            "style, and tone, and describe a concrete scene with subject, composition, lighting, and mood. "
+            "When a product visual description is provided, your prompts MUST describe that exact product. "
             "Avoid text overlays in the image. Vary scenes drastically across the 15. "
             "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]}."
         )
@@ -579,6 +657,7 @@ Brand identity:
 
 Return 15 prompts."""
         target_count = 15
+
     raw = await _claude_call(a_key, system, user, max_tokens=4000)
     try:
         prompts = _extract_json(raw).get("prompts", [])
@@ -594,25 +673,24 @@ Return 15 prompts."""
     for i, p in enumerate(prompts):
         if enabled and i < len(enabled):
             t = enabled[i]
-            creatives.append(AdCreative(prompt=p, aspect=t.aspect, template_name=t.name, template_number=t.number, needs_product=t.needs_product))
+            creatives.append(AdCreative(prompt=p, aspect=t.aspect, template_name=t.name, template_number=t.number))
         else:
             creatives.append(AdCreative(prompt=p, aspect="1:1"))
 
     run = AdRun(brand_id=brand_id, creatives=creatives)
     await db.ad_runs.insert_one(run.model_dump())
 
-    # Read default quality from settings
+    # ── Step 3: Generate images with gpt-image-1 concurrently ──
     settings_doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
     settings = Settings(**settings_doc) if settings_doc else Settings()
-    steps = QUALITY_TO_STEPS.get(settings.quality, 4)
+    oai_quality = QUALITY_TO_OAI.get(settings.quality, "medium")
 
-    # Generate images concurrently with cap
-    sem = asyncio.Semaphore(6)
+    sem = asyncio.Semaphore(3)  # gpt-image-1 is slower; cap concurrency at 3
 
     async def worker(creative: AdCreative):
-        size = _aspect_to_image_size(creative.aspect)
+        size = _aspect_to_openai_size(creative.aspect)
         async with sem:
-            res = await _fal_generate(f_key, creative.prompt, image_size=size, num_inference_steps=steps)
+            res = await _openai_generate(o_key, creative.prompt, size=size, quality=oai_quality)
         if "url" in res:
             creative.image_url = res["url"]
         else:
@@ -658,12 +736,23 @@ async def download_zip(brand_id: str):
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for i, c in enumerate(creatives, start=1):
                 try:
-                    r = await hc.get(c["image_url"])
-                    if r.status_code != 200:
-                        continue
+                    image_url = c.get("image_url", "")
+                    if image_url.startswith("/api/images/"):
+                        # Local file — read directly from disk
+                        filename = image_url.split("/api/images/")[1]
+                        local_path = IMAGES_DIR / filename
+                        if not local_path.exists():
+                            continue
+                        img_content = await asyncio.to_thread(local_path.read_bytes)
+                    else:
+                        # External URL (legacy fal.ai)
+                        r = await hc.get(image_url)
+                        if r.status_code != 200:
+                            continue
+                        img_content = r.content
                     name = (c.get("template_name") or f"creative_{i}").replace("/", "-").replace(" ", "_")
                     fn = f"{i:02d}_{name}.png"
-                    zf.writestr(fn, r.content)
+                    zf.writestr(fn, img_content)
                 except Exception:
                     continue
             # also add a prompts.txt
@@ -676,6 +765,18 @@ async def download_zip(brand_id: str):
     safe_name = (brand.get("name") or "brand").lower().replace(" ", "-")
     headers = {"Content-Disposition": f'attachment; filename="{safe_name}-ads.zip"'}
     return StreamingResponse(buf, media_type="application/zip", headers=headers)
+
+
+@api_router.get("/images/{filename}")
+async def serve_image(filename: str):
+    """Serve a locally generated image by filename."""
+    # Prevent path traversal
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    path = IMAGES_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(str(path), media_type="image/png")
 
 
 # Legacy status routes preserved
@@ -734,7 +835,7 @@ class SettingsPatch(BaseModel):
     cost_cap_per_run_usd: Optional[float] = None
 
 
-QUALITY_TO_STEPS = {"low": 2, "medium": 4, "high": 8}
+QUALITY_TO_OAI = {"low": "low", "medium": "medium", "high": "high"}
 
 
 @api_router.patch("/templates/{template_id}", response_model=Template)
@@ -772,7 +873,7 @@ async def get_settings():
 @api_router.patch("/settings", response_model=Settings)
 async def update_settings(patch: SettingsPatch):
     upd = {k: v for k, v in patch.model_dump().items() if v is not None}
-    if "quality" in upd and upd["quality"] not in QUALITY_TO_STEPS:
+    if "quality" in upd and upd["quality"] not in QUALITY_TO_OAI:
         raise HTTPException(status_code=400, detail="quality must be low | medium | high")
     if "variations_per_prompt" in upd and not (1 <= int(upd["variations_per_prompt"]) <= 4):
         raise HTTPException(status_code=400, detail="variations_per_prompt must be 1..4")
