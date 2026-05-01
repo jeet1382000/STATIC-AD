@@ -1,7 +1,7 @@
 # Static Ad Studio — PRD
 
 ## Original Problem Statement
-> https://ad-gen-workspace.preview.emergentagent.com/ — can you build an app similar to above
+> https://this-project-demo.preview.emergentagent.com/ — can you build an app similar to above
 
 ## Architecture
 - **Backend**: FastAPI + MongoDB (motor). All routes prefixed `/api`. Per-request BYOK headers `X-Anthropic-Key`, `X-FAL-Key` (never persisted).
