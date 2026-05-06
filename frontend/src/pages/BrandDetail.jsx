@@ -260,7 +260,7 @@ function PhaseChip({ n, label, done, active }) {
     ? "bg-ink text-white border-ink"
     : active
     ? "bg-white border-ink text-black"
-    : "bg-white border-soft text-black/40";
+    : "bg-white border-black/20 text-black";
   return (
     <div className={`flex items-center gap-2 border px-3 h-8 ${cls}`} data-testid={`phase-${n}`}>
       <span className="font-mono-tech text-xs">№{n}</span>

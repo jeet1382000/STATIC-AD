@@ -34,7 +34,7 @@ export default function Layout({ children, onOpenKeys }) {
           </Link>
         </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-0.5">
+        <nav className="flex-1 py-3 space-y-0.5">
           {nav.map((n) => {
             const Active = n.end ? loc.pathname === n.to : loc.pathname.startsWith(n.to);
             const Icon = n.icon;
@@ -42,13 +42,13 @@ export default function Layout({ children, onOpenKeys }) {
               <NavLink
                 key={n.to}
                 to={n.to}
-                className={`flex items-center gap-3 h-12 px-3 transition-colors duration-150 ${
+                className={`flex items-center gap-3 h-11 px-5 transition-colors duration-150 ${
                   Active ? "bg-ink text-white" : "text-black hover:bg-cream-deep"
                 }`}
                 data-testid={`nav-${n.label.toLowerCase().replace(/\s/g, "-")}`}
               >
-                <Icon size={18} strokeWidth={1.5} />
-                <span className="text-base font-medium">{n.label}</span>
+                <Icon size={18} strokeWidth={2} />
+                <span className="text-base font-semibold">{n.label}</span>
               </NavLink>
             );
           })}
