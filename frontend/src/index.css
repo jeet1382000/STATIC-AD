@@ -64,8 +64,14 @@ html, body {
   .bg-cream-deep { background: var(--cream-deep); }
   .bg-coral { background: var(--coral); }
   .bg-coral-deep { background: var(--coral-deep); }
+  .bg-ink { background-color: var(--ink); }
+  .bg-ink\/10 { background-color: rgba(10,10,10,0.10); }
+  .bg-ink\/80 { background-color: rgba(10,10,10,0.80); }
   .text-coral { color: var(--coral-deep); }
+  .text-ink { color: var(--ink); }
   .border-ink { border-color: var(--ink); }
+  .border-ink\/15 { border-color: rgba(10,10,10,0.15); }
+  .hover\:bg-ink:hover { background-color: var(--ink); }
   .border-soft { border-color: rgba(0,0,0,0.10); }
 }
 
