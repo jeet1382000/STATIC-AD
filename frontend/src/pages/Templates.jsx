@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Pencil, RotateCcw, X, Save, Check } from "lucide-react";
+import { Pencil, RotateCcw, X, Save, Check, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../lib/api";
 
@@ -9,6 +9,7 @@ export default function Templates() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
+  const [creating, setCreating] = useState(false);
   const [resetBusy, setResetBusy] = useState(false);
 
   const load = async () => {
@@ -60,6 +61,30 @@ export default function Templates() {
     }
   };
 
+  const createTemplate = async (data) => {
+    try {
+      const r = await api.createTemplate(data);
+      setItems((prev) => [...prev, r.data].sort((a, b) => a.number - b.number));
+      toast.success("Template created");
+      setCreating(false);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Create failed");
+    }
+  };
+
+  const deleteTemplate = async (t) => {
+    if (!window.confirm(`Delete template "${t.name}"? This cannot be undone.`)) return;
+    const prev = items;
+    setItems((curr) => curr.filter((x) => x.id !== t.id));
+    try {
+      await api.deleteTemplate(t.id);
+      toast.success("Template deleted");
+    } catch {
+      toast.error("Delete failed");
+      setItems(prev);
+    }
+  };
+
   const enabledCount = items.filter((t) => t.enabled).length;
 
   return (
@@ -67,14 +92,23 @@ export default function Templates() {
       <div className="label-mono mb-3">Templates</div>
       <div className="flex items-end justify-between flex-wrap gap-4">
         <h1 className="font-display-tight text-6xl lg:text-7xl uppercase leading-[0.9]">Template library<span className="text-[var(--red)]">.</span></h1>
-        <button
-          onClick={resetAll}
-          disabled={resetBusy}
-          className="flex items-center gap-2 px-4 h-10 border border-soft hover:border-ink text-sm disabled:opacity-50"
-          data-testid="reset-templates-button"
-        >
-          <RotateCcw size={14} strokeWidth={1.5} /> Reset to defaults
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setCreating(true)}
+            className="flex items-center gap-2 px-4 h-10 bg-[var(--red)] hover:bg-black text-white text-sm font-medium transition-colors"
+            data-testid="new-template-button"
+          >
+            <Plus size={14} strokeWidth={2} /> New template
+          </button>
+          <button
+            onClick={resetAll}
+            disabled={resetBusy}
+            className="flex items-center gap-2 px-4 h-10 border border-soft hover:border-ink text-sm disabled:opacity-50"
+            data-testid="reset-templates-button"
+          >
+            <RotateCcw size={14} strokeWidth={1.5} /> Reset to defaults
+          </button>
+        </div>
       </div>
       <p className="text-base text-black/65 mt-4 max-w-3xl leading-relaxed">
         15 production-ready ad templates. Toggle to enable per brand run, or edit the raw prompt scaffold.
@@ -85,13 +119,14 @@ export default function Templates() {
       </div>
 
       <div className="mt-10 bg-white border border-soft" data-testid="templates-table">
-        <div className="grid grid-cols-[64px_1fr_120px_140px_180px_120px] items-center px-5 py-3 bg-cream-deep border-b border-soft">
+        <div className="grid grid-cols-[64px_1fr_120px_140px_180px_120px_56px] items-center px-5 py-3 bg-cream-deep border-b border-soft">
           <div className="label-mono">№</div>
           <div className="label-mono">Name</div>
           <div className="label-mono">Aspect</div>
           <div className="label-mono">Needs product</div>
           <div className="label-mono">Category</div>
           <div className="label-mono text-right">Enabled</div>
+          <div className="label-mono text-right">Del</div>
         </div>
 
         {loading ? (
@@ -100,7 +135,7 @@ export default function Templates() {
           items.map((t) => (
             <div
               key={t.id}
-              className="grid grid-cols-[64px_1fr_120px_140px_180px_120px] items-center px-5 py-4 border-b border-soft last:border-b-0 hover:bg-cream"
+              className="grid grid-cols-[64px_1fr_120px_140px_180px_120px_56px] items-center px-5 py-4 border-b border-soft last:border-b-0 hover:bg-cream"
               data-testid={`template-row-${t.number}`}
             >
               <div className="font-mono-tech text-xs text-black/50">№{String(t.number).padStart(2, "0")}</div>
@@ -129,6 +164,17 @@ export default function Templates() {
                   {t.enabled ? "ON" : "OFF"}
                 </button>
               </div>
+              <div className="flex justify-end">
+                <button
+                  onClick={() => deleteTemplate(t)}
+                  className="w-9 h-9 flex items-center justify-center text-black/40 hover:text-[var(--red)] hover:bg-[var(--red)]/10 transition-colors"
+                  data-testid={`template-delete-${t.number}`}
+                  aria-label={`Delete template ${t.name}`}
+                  title="Delete template"
+                >
+                  <Trash2 size={15} strokeWidth={1.75} />
+                </button>
+              </div>
             </div>
           ))
         )}
@@ -141,15 +187,31 @@ export default function Templates() {
           onSave={saveEdit}
         />
       )}
+
+      {creating && (
+        <EditModal
+          template={{
+            number: (items[items.length - 1]?.number || 0) + 1,
+            name: "",
+            scaffold: "",
+            aspect: "1:1",
+            needs_product: false,
+          }}
+          mode="create"
+          onClose={() => setCreating(false)}
+          onSave={createTemplate}
+        />
+      )}
     </div>
   );
 }
 
-function EditModal({ template, onClose, onSave }) {
+function EditModal({ template, onClose, onSave, mode = "edit" }) {
   const [name, setName] = useState(template.name);
   const [scaffold, setScaffold] = useState(template.scaffold);
   const [aspect, setAspect] = useState(template.aspect);
   const [needsProduct, setNeedsProduct] = useState(template.needs_product);
+  const isCreate = mode === "create";
 
   return (
     <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-stretch justify-end" data-testid="template-edit-modal">
@@ -157,8 +219,14 @@ function EditModal({ template, onClose, onSave }) {
         <div className="px-10 md:px-14 py-10 md:py-14 space-y-8">
           {/* Header */}
           <div>
-            <div className="label-mono">Edit template №{String(template.number).padStart(2, "0")}</div>
-            <h2 className="font-display-tight text-5xl md:text-6xl uppercase leading-[0.9] mt-2">{template.name}</h2>
+            <div className="label-mono">
+              {isCreate
+                ? `New template · №${String(template.number).padStart(2, "0")}`
+                : `Edit template №${String(template.number).padStart(2, "0")}`}
+            </div>
+            <h2 className="font-display-tight text-5xl md:text-6xl uppercase leading-[0.9] mt-2">
+              {isCreate ? "Create custom template." : template.name}
+            </h2>
           </div>
 
           {/* Name */}
@@ -167,6 +235,7 @@ function EditModal({ template, onClose, onSave }) {
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
+              placeholder={isCreate ? "Holiday Sale Bundle" : ""}
               className="w-full h-14 px-4 bg-white border border-ink focus:border-[var(--red)] focus:outline-none text-base"
               data-testid="template-edit-name"
             />
@@ -207,6 +276,7 @@ function EditModal({ template, onClose, onSave }) {
               value={scaffold}
               onChange={(e) => setScaffold(e.target.value)}
               rows={12}
+              placeholder={isCreate ? "A bold ad for [BRAND NAME] showing [SUBJECT] on a [BRAND BACKGROUND COLOR] background. Use [BRAND PRIMARY COLOR] for the headline reading \"[HEADLINE TEXT]\"…" : ""}
               className="w-full p-5 bg-white border border-ink focus:border-[var(--red)] focus:outline-none text-base leading-relaxed resize-y"
               data-testid="template-edit-scaffold"
             />
@@ -227,7 +297,7 @@ function EditModal({ template, onClose, onSave }) {
               className="flex items-center gap-2 px-6 h-12 bg-[var(--red)] hover:bg-black text-white text-base font-medium disabled:opacity-40 transition-colors"
               data-testid="template-edit-save"
             >
-              <Save size={16} strokeWidth={1.75} /> Save
+              <Save size={16} strokeWidth={1.75} /> {isCreate ? "Create template" : "Save"}
             </button>
           </div>
         </div>

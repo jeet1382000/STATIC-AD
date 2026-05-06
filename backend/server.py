@@ -1011,6 +1011,15 @@ class TemplatePatch(BaseModel):
     needs_product: Optional[bool] = None
 
 
+class TemplateCreate(BaseModel):
+    name: str
+    scaffold: str
+    aspect: str = "1:1"
+    needs_product: bool = False
+    category: str = "custom"
+    enabled: bool = True
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = "defaults"
@@ -1046,6 +1055,36 @@ async def reset_templates():
     await _seed_templates_if_empty()
     docs = await db.templates.find({}, {"_id": 0}).sort("number", 1).to_list(100)
     return [Template(**d) for d in docs]
+
+
+@api_router.post("/templates", response_model=Template, status_code=201)
+async def create_template(payload: TemplateCreate):
+    if not payload.name.strip() or not payload.scaffold.strip():
+        raise HTTPException(status_code=400, detail="Name and scaffold are required")
+    if payload.aspect not in {"1:1", "4:5", "9:16", "16:9", "4:3"}:
+        raise HTTPException(status_code=400, detail="Invalid aspect ratio")
+    last = await db.templates.find_one({}, {"_id": 0, "number": 1}, sort=[("number", -1)])
+    next_number = (last["number"] + 1) if last and "number" in last else 1
+    doc = {
+        "id": str(uuid.uuid4()),
+        "number": next_number,
+        "name": payload.name.strip(),
+        "scaffold": payload.scaffold.strip(),
+        "aspect": payload.aspect,
+        "needs_product": payload.needs_product,
+        "category": payload.category.strip() or "custom",
+        "enabled": payload.enabled,
+    }
+    await db.templates.insert_one(doc)
+    return Template(**{k: v for k, v in doc.items() if k != "_id"})
+
+
+@api_router.delete("/templates/{template_id}", status_code=204)
+async def delete_template(template_id: str):
+    res = await db.templates.delete_one({"id": template_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return None
 
 
 # =============== Settings ===============
