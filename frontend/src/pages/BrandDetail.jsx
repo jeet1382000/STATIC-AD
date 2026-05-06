@@ -49,7 +49,7 @@ export default function BrandDetail({ onOpenKeys }) {
   };
 
   const pollUntilDone = async (runId) => {
-    const maxMs = 12 * 60 * 1000; // 12 minutes max
+    const maxMs = 12 * 60 * 1000;
     const start = Date.now();
     let lastDone = -1;
     while (Date.now() - start < maxMs) {
@@ -59,15 +59,28 @@ export default function BrandDetail({ onOpenKeys }) {
         const run = freshRuns.find((r) => r.id === runId);
         if (!run) continue;
         setRuns(freshRuns);
+
         const done = run.creatives.filter((c) => c.image_url).length;
         const total = run.creatives.length;
-        if (done !== lastDone) {
-          log(`↻ ${done}/${total} images rendered with gpt-image-2`);
-          setPhaseMsg(`Rendering images… ${done}/${total}`);
+
+        if (run.status === "pending") {
+          setPhaseMsg("Analyzing product & generating prompts…");
+          continue;
+        }
+        if (run.status === "failed") {
+          const errMsg = run.error || "Pipeline failed";
+          log(`× Pipeline failed: ${errMsg}`);
+          toast.error(errMsg);
+          return;
+        }
+        // status === "running" or "done"
+        if (done !== lastDone && total > 0) {
+          log(`↻ ${done}/${total} images composited with gpt-image-2`);
+          setPhaseMsg(`Compositing images… ${done}/${total}`);
           lastDone = done;
         }
-        if (run.status === "done" || run.status === "failed") return;
-        if (run.creatives.every((c) => c.image_url || c.error)) return;
+        if (run.status === "done") return;
+        if (total > 0 && run.creatives.every((c) => c.image_url || c.error)) return;
       } catch {
         // ignore transient polling errors
       }
@@ -80,13 +93,13 @@ export default function BrandDetail({ onOpenKeys }) {
     try {
       log("№01 Vision — Claude 4.6 analyzing product photos");
       log("№02 Prompts — Claude 4.6 writing scene-composition prompts");
-      setPhaseMsg("Analyzing product & generating prompts…");
+      log("№03 Images — gpt-image-2 will composite product into each scene");
+      setPhaseMsg("Starting pipeline…");
       const response = await api.generate(id, angleArg ?? angle);
       const runData = response.data;
       setRuns((prev) => [runData, ...prev.filter((r) => r.id !== runData.id)]);
-      log(`✓ ${runData.creatives.length} prompts ready — compositing product with gpt-image-2`);
-      log("№03 Images — gpt-image-2 compositing product into each scene");
-      setPhaseMsg("Rendering images with gpt-image-2…");
+      log("✓ Pipeline started — polling for progress…");
+      setPhaseMsg("Analyzing product & generating prompts…");
       await pollUntilDone(runData.id);
       log("✓ All done. Ready to download.");
       toast.success("All creatives generated.");

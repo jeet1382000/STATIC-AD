@@ -166,7 +166,8 @@ class AdRun(BaseModel):
     brand_id: str
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     creatives: List[AdCreative] = []
-    status: str = "running"  # running | done | failed
+    status: str = "pending"   # pending | running | done | failed
+    error: Optional[str] = None
 
 
 class Template(BaseModel):
@@ -628,6 +629,10 @@ async def generate_creatives(
     x_anthropic_key: Optional[str] = Header(None),
     x_openai_key: Optional[str] = Header(None),
 ):
+    """Creates a pending AdRun and immediately returns (<1s).
+    The full pipeline (vision → prompts → image gen) runs in the background.
+    Poll GET /brands/{id}/runs to track progress.
+    """
     a_key = _require_anthropic_key(x_anthropic_key)
     o_key = _require_openai_key(x_openai_key)
 
@@ -638,63 +643,124 @@ async def generate_creatives(
     if not brand.identity:
         raise HTTPException(status_code=400, detail="Run brand research first")
 
-    # ── Step 1: Claude Vision — analyze product images if present ──
-    product_visual_description = ""
-    if brand.product_images:
-        logger.info("Running product vision analysis for brand %s (%d images)", brand.id, len(brand.product_images))
-        product_visual_description = await _claude_vision_analyze(a_key, brand.product_images)
-        if product_visual_description:
-            logger.info("Product vision: %s", product_visual_description[:120])
+    settings_doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
+    settings = Settings(**settings_doc) if settings_doc else Settings()
+    oai_quality = QUALITY_TO_OAI.get(settings.quality, "medium")
 
+    # Create a pending run — return this immediately, pipeline runs in background
+    run = AdRun(brand_id=brand_id, status="pending")
+    await db.ad_runs.insert_one(run.model_dump())
+
+    asyncio.create_task(
+        _full_pipeline_background(run.id, brand, payload.angle, a_key, o_key, oai_quality)
+    )
+
+    return run
+
+
+async def _full_pipeline_background(
+    run_id: str,
+    brand: "Brand",
+    angle: Optional[str],
+    a_key: str,
+    o_key: str,
+    quality: str,
+):
+    """Full generation pipeline running entirely in background:
+    Step 1 — Claude Vision: analyze uploaded product photos
+    Step 2 — Claude Prompts: write scene-composition prompts per template
+    Step 3 — GPT Image 2: composite product into each scene (images/edits)
+    """
+    try:
+        # ── Step 1: Vision ──
+        product_visual_description = ""
+        if brand.product_images:
+            logger.info("Run %s: vision analysis (%d images)", run_id, len(brand.product_images))
+            product_visual_description = await _claude_vision_analyze(a_key, brand.product_images)
+            if product_visual_description:
+                logger.info("Run %s: vision done — %s", run_id, product_visual_description[:80])
+
+        # ── Step 2: Prompts ──
+        logger.info("Run %s: generating prompts", run_id)
+        creatives = await _build_prompts(run_id, brand, angle, a_key, product_visual_description)
+        if not creatives:
+            await db.ad_runs.update_one(
+                {"id": run_id},
+                {"$set": {"status": "failed", "error": "Claude returned no prompts"}},
+            )
+            return
+
+        # Save prompts; mark run as "running" so frontend shows phase 03 active
+        await db.ad_runs.update_one(
+            {"id": run_id},
+            {"$set": {"creatives": [c.model_dump() for c in creatives], "status": "running"}},
+        )
+        logger.info("Run %s: %d prompts saved, starting image generation", run_id, len(creatives))
+
+        # ── Step 3: Images ──
+        await _generate_images_background(
+            run_id, creatives, o_key, quality, brand.product_images or None
+        )
+
+    except Exception as e:
+        logger.error("Run %s: pipeline error: %s", run_id, e, exc_info=True)
+        await db.ad_runs.update_one(
+            {"id": run_id},
+            {"$set": {"status": "failed", "error": str(e)[:300]}},
+        )
+
+
+async def _build_prompts(
+    run_id: str,
+    brand: "Brand",
+    angle: Optional[str],
+    a_key: str,
+    product_visual_description: str,
+) -> List[AdCreative]:
+    """Ask Claude to write image-generation prompts for each enabled template.
+    Returns a list of AdCreative objects (no image_url yet).
+    """
     identity_json = json.dumps(brand.identity.model_dump(), indent=2)
-    angle_line = f"Creative angle: {payload.angle}" if payload.angle else "Creative angle: open / surprise the user"
+    angle_line = f"Creative angle: {angle}" if angle else "Creative angle: open / surprise the user"
 
-    # Build the product reference block for prompt generation
     if product_visual_description:
         photos_line = (
-            f"Product visual description (from uploaded photos — use this to depict the product accurately):\n"
+            f"Product visual description (from uploaded photos):\n"
             f"\"\"\"{product_visual_description}\"\"\"\n"
-            f"There are {len(brand.product_images)} reference photo(s). Every prompt that features the product "
-            f"MUST faithfully describe it as specified above."
+            f"There are {len(brand.product_images)} reference photo(s)."
         )
     elif brand.product_images:
-        photos_line = (
-            f"Reference photos: {len(brand.product_images)} product photo(s) provided. "
-            "Generate prompts that describe the same product type and feel."
-        )
+        photos_line = f"Reference photos: {len(brand.product_images)} product photo(s) provided."
     else:
         photos_line = "Reference photos: none."
 
     modifier = (brand.identity.image_generation_modifier or "").strip()
     modifier_line = (
-        f"\n\nIMPORTANT: prepend this exact paragraph to every prompt as the first sentences (verbatim, then your scene):\n\"\"\"{modifier}\"\"\"\n"
+        f"\n\nIMPORTANT: prepend this exact paragraph to every prompt as the first sentences "
+        f"(verbatim, then your scene):\n\"\"\"{modifier}\"\"\"\n"
         if modifier else ""
     )
 
-    # ── Step 2: Claude writes prompts from templates ──
-    await _seed_templates_if_empty()
-    tpl_docs = await db.templates.find({"enabled": True}, {"_id": 0}).sort("number", 1).to_list(20)
-    enabled = [Template(**d) for d in tpl_docs][:15]
-
-    # When real product images exist, GPT Image 2 will receive the actual product photo via
-    # images/edits — so Claude should describe the SCENE, not the product appearance.
+    # Scene-focused instruction when real product image will be passed to the model
     using_image_edit = bool(brand.product_images)
-
     if using_image_edit:
         image_mode_instruction = (
-            "IMPORTANT: The real product photo will be passed directly to the image model as a reference image "
-            "alongside your prompt (using the images/edits endpoint). "
-            "DO NOT describe the product's visual appearance (colors, shape, label, packaging) — "
-            "the model can already see it. Instead, describe the SCENE, STAGING, and CONTEXT: "
-            "background environment, surface/props, lighting setup, composition, camera angle, and mood. "
-            "Refer to the product simply as 'the product' or 'this product'. "
-            "Think: where is it placed? How is it lit? What surrounds it?"
+            "IMPORTANT: The real product photo will be passed directly to the image model as a "
+            "reference image (images/edits endpoint). DO NOT describe the product's visual appearance "
+            "(colors, shape, label, packaging) — the model can already see it. "
+            "Instead, describe the SCENE, STAGING, and CONTEXT: background environment, surface/props, "
+            "lighting setup, composition, camera angle, and mood. "
+            "Refer to the product simply as 'the product' or 'this product'."
         )
     else:
         image_mode_instruction = (
             "No product reference image is provided — describe the product visually in your prompt "
             "based on the brand identity and any product details available."
         )
+
+    await _seed_templates_if_empty()
+    tpl_docs = await db.templates.find({"enabled": True}, {"_id": 0}).sort("number", 1).to_list(20)
+    enabled = [Template(**d) for d in tpl_docs][:15]
 
     if enabled:
         templates_block = "\n".join(
@@ -705,10 +771,10 @@ async def generate_creatives(
         system = (
             "You are a world-class art director specialising in performance ad creatives. "
             "For each provided template scaffold, write ONE vivid, production-ready image-generation "
-            "prompt (40-80 words, single paragraph) that adapts the scaffold to the brand's palette, "
+            "prompt (40-80 words, single paragraph) that adapts the scaffold to the brand palette, "
             "photography style, and tone. "
             f"{image_mode_instruction} "
-            "Describe a concrete scene: subject, composition, lighting, mood. Avoid rendered text in the image. "
+            "Describe a concrete scene: subject, composition, lighting, mood. Avoid rendered text. "
             "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]} preserving template order."
         )
         user = f"""Brand: {brand.name}
@@ -728,10 +794,10 @@ Return exactly {len(enabled)} prompts, in the same order as the templates above.
         system = (
             "You are a world-class art director specialising in performance ad creatives. "
             "Write 15 distinct, vivid, production-ready image-generation prompts for static social ad creatives. "
-            "Every prompt must be a single paragraph (40-80 words), reference the brand's palette, photography "
+            "Every prompt must be a single paragraph (40-80 words), reference the brand palette, photography "
             "style, and tone, and describe a concrete scene with subject, composition, lighting, and mood. "
             f"{image_mode_instruction} "
-            "Avoid text overlays in the image. Vary scenes drastically across the 15. "
+            "Avoid text overlays. Vary scenes drastically across the 15. "
             "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]}."
         )
         user = f"""Brand: {brand.name}
@@ -750,12 +816,9 @@ Return 15 prompts."""
         prompts = _extract_json(raw).get("prompts", [])
         prompts = [p.strip() for p in prompts if isinstance(p, str) and p.strip()][:target_count]
     except Exception as e:
-        logger.error("Prompts parse failed: %s | raw=%s", e, raw[:300])
-        raise HTTPException(status_code=502, detail="Failed to parse prompts from Claude")
-    if not prompts:
-        raise HTTPException(status_code=502, detail="Claude returned no prompts")
+        logger.error("Run %s: prompts parse failed: %s | raw=%s", run_id, e, raw[:300])
+        return []
 
-    # Pair each prompt with the originating template (or default 1:1)
     creatives: List[AdCreative] = []
     for i, p in enumerate(prompts):
         if enabled and i < len(enabled):
@@ -763,21 +826,7 @@ Return 15 prompts."""
             creatives.append(AdCreative(prompt=p, aspect=t.aspect, template_name=t.name, template_number=t.number))
         else:
             creatives.append(AdCreative(prompt=p, aspect="1:1"))
-
-    run = AdRun(brand_id=brand_id, creatives=creatives, status="running")
-    await db.ad_runs.insert_one(run.model_dump())
-
-    # ── Step 3: Fire-and-forget — generate images with gpt-image-2 in background ──
-    # Returns immediately; frontend polls /runs for real-time progress.
-    settings_doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
-    settings = Settings(**settings_doc) if settings_doc else Settings()
-    oai_quality = QUALITY_TO_OAI.get(settings.quality, "medium")
-
-    asyncio.create_task(
-        _generate_images_background(run.id, list(run.creatives), o_key, oai_quality, brand.product_images or None)
-    )
-
-    return run
+    return creatives
 
 
 async def _generate_images_background(
