@@ -5,7 +5,7 @@ import { ArrowLeft, ArrowRight, UploadCloud, X } from "lucide-react";
 import { api, keysStore } from "../lib/api";
 
 const MAX_IMAGES = 5;
-const MAX_BYTES = 800_000; // ~800KB per image
+const MAX_BYTES = 5 * 1024 * 1024; // 5MB per image
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -61,7 +61,7 @@ export default function BrandNew({ onOpenKeys }) {
     const taken = list.slice(0, slots);
     const oversize = taken.find((f) => f.size > MAX_BYTES);
     if (oversize) {
-      toast.error(`${oversize.name} is over 800KB. Compress first.`);
+      toast.error(`${oversize.name} is over 5MB. Compress first.`);
       return;
     }
     try {
@@ -165,7 +165,7 @@ export default function BrandNew({ onOpenKeys }) {
                 <UploadCloud size={36} strokeWidth={1.25} />
                 <div className="font-display text-2xl">Drop product images here</div>
                 <div className="text-sm text-black/55">or click to browse</div>
-                <div className="label-mono mt-1">PNG · JPG · WEBP · max 800KB each</div>
+                <div className="label-mono mt-1">PNG · JPG · WEBP · max 5MB each</div>
               </div>
             </div>
 
