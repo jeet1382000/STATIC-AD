@@ -205,8 +205,20 @@ SEED_TEMPLATES: List[dict] = [
      "scaffold": "A radial stat-surround ad for [BRAND NAME]. Product centered on a [BRAND BACKGROUND COLOR] backdrop. Four bold stat callouts radiate outward at 45-degree angles, each with a big number and short label: \"[STAT 1]\", \"[STAT 2]\", \"[STAT 3]\", \"[STAT 4]\". Thin connecting lines in [ACCENT COLOR]. Editorial, infographic feel."},
     {"number": 11, "name": "Manifesto Ad", "aspect": "4:5", "needs_product": False, "category": "brand_voice", "enabled": True,
      "scaffold": "A typographic manifesto ad for [BRAND NAME]. No imagery. The entire frame is filled with a manifesto in [BRAND HEADLINE FONT] set large and justified: \"[MANIFESTO COPY, 4-6 LINES]\". [BRAND BACKGROUND COLOR] background, [BRAND PRIMARY COLOR] text. Small brand wordmark bottom-right. Stark, confident, all attitude."},
-    {"number": 12, "name": "Faux iPhone Screenshot", "aspect": "9:16", "needs_product": False, "category": "native_ugc", "enabled": True,
-     "scaffold": "A vertical faux-iOS text-thread screenshot for [BRAND NAME]. Three message bubbles between two contacts titled \"[CONTACT A] ↔ [CONTACT B]\". The conversation organically mentions [BRAND NAME] and the benefit: \"[BENEFIT LINE]\". Native iOS status bar, time, and battery up top. Realistic, not obviously branded. Tiny footer disclaimer: \"Paid partnership / [BRAND NAME]\"."},
+    {"number": 12, "name": "Faux iPhone Screenshot", "aspect": "9:16", "needs_product": True, "category": "native_ugc", "enabled": True,
+     "scaffold": (
+         "Ultra-realistic faux-iOS 17 iMessage screenshot. Pure white #FFFFFF background, portrait 9:16. "
+         "STATUS BAR (top): left — cellular signal bars + '5G' label; center — time e.g. '2:47 PM' in black SF Pro Medium; right — battery percentage + icon e.g. '87% 🔋'. "
+         "CONTACT HEADER ROW: '‹' back chevron far-left; center — two circular avatar portrait headshots with first names underneath (e.g. 'Sarah' on left, 'Alex' on right) and a '↔' icon between them; blue FaceTime camera icon far-right. Thin #E5E5EA separator below. "
+         "CHAT THREAD (top to bottom, generous white space between bubbles): "
+         "(1) LEFT bubble #E9E9EB rounded-rect tail-left: Person A mentions [BRAND NAME] by name with genuine enthusiasm and a specific benefit, ends with emoji. 2–3 casual sentences. "
+         "(2) RIGHT bubble #147EFB rounded-rect tail-right: Person B short enthusiastic reply endorsing [BRAND NAME]. 1–2 sentences. "
+         "Directly below the blue bubble, still in the right column: large PRODUCT PHOTO displayed as a rounded-corner image card (~65% screen width) — the product shown clearly in a clean bright shot. "
+         "(3) LEFT bubble #E9E9EB: Person A short reaction to seeing the photo, hype emoji. 1 sentence. "
+         "BOTTOM: standard rounded-rect gray input field — circle '+' icon left, light-gray 'iMessage' placeholder text, microphone icon right. "
+         "FOOTER: tiny #8E8E93 SF Pro text centered below input field — 'Paid partnership / [BRAND NAME]'. "
+         "Every element must be indistinguishable from a real iPhone screenshot: exact SF Pro font weights, #147EFB iOS blue, #E9E9EB bubble gray, correct iOS 17 bubble corner radii and tail geometry, correct avatar circle crop style."
+     )},
     {"number": 13, "name": "Post-it Note Style", "aspect": "1:1", "needs_product": False, "category": "handwritten", "enabled": True,
      "scaffold": "A hand-written post-it note ad for [BRAND NAME]. A single yellow post-it in the center of a plain desk surface, softly lit. Scrawled in casual black marker: \"[HANDWRITTEN INSIGHT]\". A small doodle of [DOODLE ELEMENT] in the corner. Tiny printed brand URL at the bottom of the frame: \"[BRAND URL]\"."},
     {"number": 14, "name": "Lifestyle UGC Selfie", "aspect": "9:16", "needs_product": True, "category": "ugc", "enabled": True,
@@ -1071,6 +1083,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_db_client():
+    """On startup, sync all template scaffolds/metadata from SEED_TEMPLATES to the DB.
+    Preserves user-customised fields (enabled, aspect) while updating scaffold/name/category.
+    """
+    for seed in SEED_TEMPLATES:
+        await db.templates.update_one(
+            {"number": seed["number"]},
+            {"$set": {
+                "scaffold": seed["scaffold"],
+                "name": seed["name"],
+                "category": seed["category"],
+                "needs_product": seed["needs_product"],
+            }},
+        )
+    logger.info("Template scaffolds synced from SEED_TEMPLATES")
 
 
 @app.on_event("shutdown")
