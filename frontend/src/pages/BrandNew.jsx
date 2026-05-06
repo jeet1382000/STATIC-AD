@@ -29,22 +29,13 @@ export default function BrandNew({ onOpenKeys }) {
   const [dragOver, setDragOver] = useState(false);
   const fileInput = useRef(null);
 
-  // Prefill from ?url=… when the user lands here from the dashboard
-  // "Drop a brand URL" input.
+  // Prefill the URL field from ?url=… when the user lands here from the
+  // dashboard "Drop a brand URL" input. The brand name field is intentionally
+  // left blank for the user to fill in.
   useEffect(() => {
     const incoming = searchParams.get("url");
     if (!incoming) return;
     setUrl((prev) => prev || incoming);
-    setName((prev) => {
-      if (prev) return prev;
-      try {
-        const host = incoming.replace(/^https?:\/\//, "").split("/")[0];
-        const root = host.split(".").slice(-2)[0] || "";
-        return root ? root.charAt(0).toUpperCase() + root.slice(1) : "";
-      } catch {
-        return "";
-      }
-    });
   }, [searchParams]);
 
   const next = () => {
