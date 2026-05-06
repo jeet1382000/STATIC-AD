@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
-import { ArrowLeft, Download, RefreshCw, Sparkles, FileJson, ChevronDown } from "lucide-react";
+import { ArrowLeft, Download, RefreshCw, Sparkles, FileJson, ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, keysStore } from "../lib/api";
 
@@ -247,7 +247,7 @@ export default function BrandDetail({ onOpenKeys }) {
           <div className="px-8 py-8">
             {tab === "dna" && <BrandDNAView brand={brand} onRegenerate={onResearch} busy={generating} />}
             {tab === "prompts" && <PromptsView run={latestRun} expanded={expanded} setExpanded={setExpanded} onRegenerate={() => onGenerate()} busy={generating} />}
-            {tab === "gallery" && <GalleryView run={latestRun} />}
+            {tab === "gallery" && <GalleryView run={latestRun} onRegenerate={() => onGenerate()} />}
           </div>
         </section>
       </div>
@@ -443,7 +443,9 @@ function NeedsPill({ needs }) {
 }
 
 // ===================== Gallery =====================
-function GalleryView({ run }) {
+function GalleryView({ run, onRegenerate }) {
+  const [lightboxIdx, setLightboxIdx] = useState(null);
+
   if (!run || !run.creatives?.length) {
     return (
       <div className="border border-dashed border-black/30 p-10 text-center label-mono">
@@ -451,27 +453,38 @@ function GalleryView({ run }) {
       </div>
     );
   }
+
   const done = run.creatives.filter((c) => c.image_url).length;
+  // index map: only images that have a URL (for lightbox navigation)
+  const withImages = run.creatives.map((c, i) => ({ ...c, gridIdx: i })).filter((c) => c.image_url);
+
   return (
     <div data-testid="gallery">
       <div className="label-mono mb-4">{done}/{run.creatives.length} generated</div>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
         {run.creatives.map((c, i) => {
           const aspectMap = { "1:1": "aspect-square", "4:5": "aspect-[4/5]", "9:16": "aspect-[9/16]", "16:9": "aspect-[16/9]", "4:3": "aspect-[4/3]" };
           const a = aspectMap[c.aspect] || "aspect-square";
+          const lightboxPos = withImages.findIndex((x) => x.id === c.id);
           return (
-            <div key={c.id} className={`${a} bg-white border border-soft relative group overflow-hidden`} data-testid={`gallery-tile-${i}`}>
+            <div
+              key={c.id}
+              className={`${a} bg-white border border-soft relative group overflow-hidden ${c.image_url ? "cursor-pointer" : ""}`}
+              data-testid={`gallery-tile-${i}`}
+              onClick={() => c.image_url && setLightboxIdx(lightboxPos)}
+            >
               {c.image_url ? (
                 <>
-                  <img src={c.image_url} alt={c.template_name || `Creative ${i + 1}`} className="w-full h-full object-cover" />
-                  <div className="absolute top-2 left-2 bg-black text-white label-mono px-2 py-1 max-w-[90%] truncate">
-                    #{String(i + 1).padStart(2, "0")} · {c.template_name || "Free"}
-                  </div>
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/70 transition-colors duration-150 p-4 flex flex-col justify-end opacity-0 group-hover:opacity-100">
-                    <p className="text-white text-xs leading-relaxed line-clamp-6">{c.prompt}</p>
-                    <a href={c.image_url} target="_blank" rel="noreferrer" download className="self-start mt-3 flex items-center gap-1 label-mono text-white hover:text-[var(--red)]">
-                      <Download size={12} strokeWidth={1.5} /> Download
-                    </a>
+                  <img
+                    src={c.image_url}
+                    alt={c.template_name || `Creative ${i + 1}`}
+                    className="w-full h-full object-cover"
+                  />
+                  {/* Hover overlay — subtle dim + expand hint, no black label */}
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors duration-200 flex items-end p-3 opacity-0 group-hover:opacity-100">
+                    <span className="bg-white/90 label-mono px-2 py-1 text-[10px]">
+                      #{String(c.template_number || i + 1).padStart(2, "0")} · {c.template_name || "Free"}
+                    </span>
                   </div>
                 </>
               ) : (
@@ -483,6 +496,133 @@ function GalleryView({ run }) {
             </div>
           );
         })}
+      </div>
+
+      {lightboxIdx !== null && (
+        <CreativeLightbox
+          creatives={withImages}
+          initialIndex={lightboxIdx}
+          onClose={() => setLightboxIdx(null)}
+          onRegenerate={onRegenerate}
+        />
+      )}
+    </div>
+  );
+}
+
+// ===================== Lightbox =====================
+function CreativeLightbox({ creatives, initialIndex, onClose, onRegenerate }) {
+  const [idx, setIdx] = useState(initialIndex);
+  const c = creatives[idx];
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowLeft") setIdx((i) => Math.max(0, i - 1));
+      if (e.key === "ArrowRight") setIdx((i) => Math.min(creatives.length - 1, i + 1));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [creatives.length, onClose]);
+
+  if (!c) return null;
+
+  const costMap = { "1:1": 0.053, "4:5": 0.080, "9:16": 0.080, "16:9": 0.120, "4:3": 0.080 };
+  const cost = costMap[c.aspect] || 0.053;
+  const templateNum = String(c.template_number || idx + 1).padStart(2, "0");
+  const filename = `${(c.template_name || "creative").replace(/\s+/g, "-").toLowerCase()}-${templateNum}.png`;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex bg-black/80"
+      onClick={onClose}
+    >
+      {/* Left — image */}
+      <div
+        className="flex-1 flex items-center justify-center relative min-w-0 p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {idx > 0 && (
+          <button
+            onClick={() => setIdx((i) => i - 1)}
+            className="absolute left-4 top-1/2 -translate-y-1/2 bg-white/10 hover:bg-white/30 p-2 text-white transition-colors"
+          >
+            <ChevronLeft size={22} strokeWidth={1.5} />
+          </button>
+        )}
+
+        <img
+          src={c.image_url}
+          alt={c.template_name}
+          className="max-h-[90vh] max-w-full object-contain shadow-2xl"
+        />
+
+        {idx < creatives.length - 1 && (
+          <button
+            onClick={() => setIdx((i) => i + 1)}
+            className="absolute right-4 top-1/2 -translate-y-1/2 bg-white/10 hover:bg-white/30 p-2 text-white transition-colors"
+          >
+            <ChevronRight size={22} strokeWidth={1.5} />
+          </button>
+        )}
+
+        {/* Counter */}
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 label-mono text-white/50 text-[11px]">
+          {idx + 1} / {creatives.length}
+        </div>
+      </div>
+
+      {/* Right — info panel */}
+      <div
+        className="w-[400px] shrink-0 bg-cream flex flex-col border-l border-soft"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between px-6 py-5 border-b border-soft">
+          <div>
+            <div className="label-mono text-black/40 mb-0.5">#{templateNum}</div>
+            <h2 className="font-display text-2xl tracking-tight leading-tight">
+              {(c.template_name || "FREE FORM").toUpperCase()}
+            </h2>
+            <div className="label-mono mt-1.5 text-black/50">
+              {c.aspect} · medium · ${cost.toFixed(3)}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="ml-4 mt-0.5 p-1.5 hover:bg-cream-deep transition-colors"
+          >
+            <X size={16} strokeWidth={1.5} />
+          </button>
+        </div>
+
+        {/* Prompt */}
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          <div className="label-mono text-black/40 mb-3">PROMPT</div>
+          <p className="font-mono-tech text-sm leading-relaxed text-black/80">{c.prompt}</p>
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-3 px-6 py-5 border-t border-soft">
+          <a
+            href={c.image_url}
+            download={filename}
+            target="_blank"
+            rel="noreferrer"
+            className="flex-1 flex items-center justify-center gap-2 h-10 border border-ink hover:bg-ink hover:text-white transition-colors label-mono"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Download size={13} strokeWidth={1.5} />
+            Download
+          </a>
+          <button
+            onClick={() => { onClose(); onRegenerate(); }}
+            className="flex-1 flex items-center justify-center gap-2 h-10 bg-[var(--red)] text-white hover:bg-black transition-colors label-mono"
+          >
+            <RefreshCw size={13} strokeWidth={1.5} />
+            Regenerate
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -306,9 +306,15 @@ async def _openai_edit(openai_key: str, product_image_data_url: str, prompt: str
 
     headers = {"Authorization": f"Bearer {openai_key}"}
     files = [("image", (f"product.{ext}", image_bytes, media_type))]
+    # Prepend a clean-output guard so the model doesn't reproduce website chrome
+    clean_prompt = (
+        "Clean professional ad creative — no website navigation bars, no browser headers, "
+        "no UI chrome, no dark header bands from the reference image. "
+        + prompt
+    )
     data = {
         "model": OPENAI_IMAGE_MODEL,
-        "prompt": prompt,
+        "prompt": clean_prompt,
         "size": size,
         "quality": quality,
         "n": "1",
