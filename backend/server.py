@@ -284,6 +284,69 @@ async def _claude_call(api_key: str, system: str, user: str, max_tokens: int = 1
     return await asyncio.to_thread(_run)
 
 
+async def _openai_edit(openai_key: str, product_image_data_url: str, prompt: str, size: str = "1024x1024", quality: str = "medium") -> dict:
+    """Call OpenAI gpt-image-2 /images/edits — composites the real uploaded product image into the scene.
+
+    Falls back to _openai_generate if the image data URL is invalid or the edit call fails.
+    """
+    match = re.match(r"data:([^;]+);base64,(.+)", product_image_data_url, re.DOTALL)
+    if not match:
+        logger.warning("Invalid product image data URL — falling back to generate")
+        return await _openai_generate(openai_key, prompt, size=size, quality=quality)
+
+    media_type = match.group(1)
+    try:
+        image_bytes = base64.b64decode(match.group(2).strip())
+    except Exception as e:
+        logger.warning("Failed to decode product image: %s — falling back to generate", e)
+        return await _openai_generate(openai_key, prompt, size=size, quality=quality)
+
+    ext = "png" if "png" in media_type else ("jpg" if "jpeg" in media_type else "webp" if "webp" in media_type else "png")
+
+    headers = {"Authorization": f"Bearer {openai_key}"}
+    files = [("image", (f"product.{ext}", image_bytes, media_type))]
+    data = {
+        "model": OPENAI_IMAGE_MODEL,
+        "prompt": prompt,
+        "size": size,
+        "quality": quality,
+        "n": "1",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as hc:
+            resp = await hc.post(
+                "https://api.openai.com/v1/images/edits",
+                headers=headers,
+                files=files,
+                data=data,
+            )
+            if resp.status_code != 200:
+                try:
+                    error_detail = resp.json().get("error", {}).get("message", resp.text[:200])
+                except Exception:
+                    error_detail = resp.text[:200]
+                logger.warning("images/edits failed (%s): %s — falling back to generate", resp.status_code, error_detail)
+                return await _openai_generate(openai_key, prompt, size=size, quality=quality)
+
+            resp_data = resp.json()
+            image_data = resp_data.get("data", [])
+            if not image_data:
+                return {"error": "no image returned from edit endpoint"}
+            b64_data = image_data[0].get("b64_json")
+            if not b64_data:
+                return {"error": "no b64_json in edit response"}
+
+            out_bytes = base64.b64decode(b64_data)
+            image_id = str(uuid.uuid4()) + ".png"
+            image_path = IMAGES_DIR / image_id
+            await asyncio.to_thread(image_path.write_bytes, out_bytes)
+            return {"url": f"/api/images/{image_id}"}
+    except Exception as e:
+        logger.error("OpenAI image edit exception: %s — falling back to generate", e)
+        return await _openai_generate(openai_key, prompt, size=size, quality=quality)
+
+
 async def _openai_generate(openai_key: str, prompt: str, size: str = "1024x1024", quality: str = "medium") -> dict:
     """Call OpenAI gpt-image-2 to generate one image. Saves PNG to IMAGES_DIR. Returns {url} or {error}."""
     headers = {
@@ -323,20 +386,18 @@ async def _openai_generate(openai_key: str, prompt: str, size: str = "1024x1024"
 
 
 def _aspect_to_openai_size(aspect: str) -> str:
-    """Map human aspect string to gpt-image-2 supported sizes.
-    Presets: 1024x1024 | 1024x1536 | 1536x1024 | 2048x2048 | 2048x1152 | 2048x1536
+    """Map human aspect string to gpt-image-2 supported size presets.
+    Safe for both /images/generations and /images/edits endpoints.
     """
     a = (aspect or "1:1").strip()
     if a == "1:1":
         return "1024x1024"
-    if a == "4:5":
-        return "1024x1280"   # ~4:5 portrait (multiples of 16, within limits)
-    if a == "9:16":
-        return "1024x1536"   # portrait 2:3 (closest native preset)
+    if a in ("4:5", "9:16"):
+        return "1024x1536"   # portrait preset
     if a == "16:9":
-        return "2048x1152"   # native 16:9 at 2K — gpt-image-2 preset
+        return "2048x1152"   # native 16:9 2K preset
     if a == "4:3":
-        return "1536x1024"   # landscape 3:2
+        return "1536x1024"   # landscape 3:2 preset
     return "1024x1024"
 
 
@@ -615,6 +676,26 @@ async def generate_creatives(
     tpl_docs = await db.templates.find({"enabled": True}, {"_id": 0}).sort("number", 1).to_list(20)
     enabled = [Template(**d) for d in tpl_docs][:15]
 
+    # When real product images exist, GPT Image 2 will receive the actual product photo via
+    # images/edits — so Claude should describe the SCENE, not the product appearance.
+    using_image_edit = bool(brand.product_images)
+
+    if using_image_edit:
+        image_mode_instruction = (
+            "IMPORTANT: The real product photo will be passed directly to the image model as a reference image "
+            "alongside your prompt (using the images/edits endpoint). "
+            "DO NOT describe the product's visual appearance (colors, shape, label, packaging) — "
+            "the model can already see it. Instead, describe the SCENE, STAGING, and CONTEXT: "
+            "background environment, surface/props, lighting setup, composition, camera angle, and mood. "
+            "Refer to the product simply as 'the product' or 'this product'. "
+            "Think: where is it placed? How is it lit? What surrounds it?"
+        )
+    else:
+        image_mode_instruction = (
+            "No product reference image is provided — describe the product visually in your prompt "
+            "based on the brand identity and any product details available."
+        )
+
     if enabled:
         templates_block = "\n".join(
             f"  №{t.number:02d} [{t.aspect} · {t.category}{' · needs product' if t.needs_product else ''}] "
@@ -625,8 +706,8 @@ async def generate_creatives(
             "You are a world-class art director specialising in performance ad creatives. "
             "For each provided template scaffold, write ONE vivid, production-ready image-generation "
             "prompt (40-80 words, single paragraph) that adapts the scaffold to the brand's palette, "
-            "photography style, and tone. When a product visual description is provided, your prompt "
-            "MUST describe that exact product — its colors, shape, label, and distinctive features. "
+            "photography style, and tone. "
+            f"{image_mode_instruction} "
             "Describe a concrete scene: subject, composition, lighting, mood. Avoid rendered text in the image. "
             "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]} preserving template order."
         )
@@ -649,7 +730,7 @@ Return exactly {len(enabled)} prompts, in the same order as the templates above.
             "Write 15 distinct, vivid, production-ready image-generation prompts for static social ad creatives. "
             "Every prompt must be a single paragraph (40-80 words), reference the brand's palette, photography "
             "style, and tone, and describe a concrete scene with subject, composition, lighting, and mood. "
-            "When a product visual description is provided, your prompts MUST describe that exact product. "
+            f"{image_mode_instruction} "
             "Avoid text overlays in the image. Vary scenes drastically across the 15. "
             "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]}."
         )
@@ -692,25 +773,45 @@ Return 15 prompts."""
     settings = Settings(**settings_doc) if settings_doc else Settings()
     oai_quality = QUALITY_TO_OAI.get(settings.quality, "medium")
 
-    asyncio.create_task(_generate_images_background(run.id, list(run.creatives), o_key, oai_quality))
+    asyncio.create_task(
+        _generate_images_background(run.id, list(run.creatives), o_key, oai_quality, brand.product_images or None)
+    )
 
     return run
 
 
-async def _generate_images_background(run_id: str, creatives: List[AdCreative], o_key: str, quality: str):
-    """Background task: generate images with gpt-image-2, update each creative in MongoDB as it completes."""
+async def _generate_images_background(
+    run_id: str,
+    creatives: List[AdCreative],
+    o_key: str,
+    quality: str,
+    product_images: Optional[List[str]] = None,
+):
+    """Background task: for each creative, call gpt-image-2.
+    - If product_images present → /images/edits (real product composited into scene)
+    - Otherwise → /images/generations (text-to-image)
+    Updates each creative in MongoDB as it completes.
+    """
+    # Use the first uploaded product image as the primary reference
+    primary_product_image = (product_images[0] if product_images else None)
+    mode = "edit" if primary_product_image else "generate"
+    logger.info("Run %s: image mode=%s, %d creatives", run_id, mode, len(creatives))
+
     sem = asyncio.Semaphore(4)
 
     async def worker(creative: AdCreative):
         size = _aspect_to_openai_size(creative.aspect)
         async with sem:
-            res = await _openai_generate(o_key, creative.prompt, size=size, quality=quality)
+            if primary_product_image:
+                res = await _openai_edit(o_key, primary_product_image, creative.prompt, size=size, quality=quality)
+            else:
+                res = await _openai_generate(o_key, creative.prompt, size=size, quality=quality)
         if "url" in res:
             await db.ad_runs.update_one(
                 {"id": run_id, "creatives.id": creative.id},
                 {"$set": {"creatives.$.image_url": res["url"]}},
             )
-            logger.info("Image done: run=%s creative=%s", run_id, creative.id)
+            logger.info("Image done: run=%s creative=%s mode=%s", run_id, creative.id, mode)
         else:
             err = res.get("error", "unknown")
             await db.ad_runs.update_one(

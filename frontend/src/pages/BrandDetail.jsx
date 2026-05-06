@@ -79,13 +79,13 @@ export default function BrandDetail({ onOpenKeys }) {
     setGenerating(true);
     try {
       log("№01 Vision — Claude 4.6 analyzing product photos");
-      log("№02 Prompts — Claude 4.6 writing ad prompts for your product");
+      log("№02 Prompts — Claude 4.6 writing scene-composition prompts");
       setPhaseMsg("Analyzing product & generating prompts…");
       const response = await api.generate(id, angleArg ?? angle);
       const runData = response.data;
       setRuns((prev) => [runData, ...prev.filter((r) => r.id !== runData.id)]);
-      log(`✓ ${runData.creatives.length} prompts ready — rendering images with gpt-image-2`);
-      log("№03 Images — gpt-image-2 rendering creatives in parallel");
+      log(`✓ ${runData.creatives.length} prompts ready — compositing product with gpt-image-2`);
+      log("№03 Images — gpt-image-2 compositing product into each scene");
       setPhaseMsg("Rendering images with gpt-image-2…");
       await pollUntilDone(runData.id);
       log("✓ All done. Ready to download.");
