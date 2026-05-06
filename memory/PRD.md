@@ -20,6 +20,9 @@
 4. 3-step wizard for full brand+product+angle creation.
 5. Brand detail page: identity card (palette, fonts, tone, photography style, keywords) + 15-image grid with downloads.
 
+## Implemented (2026-02-06)
+- Dashboard "Drop a brand URL" now redirects to `/brands/new?url=…` (wizard) instead of immediately creating + researching the brand. Wizard prefills Brand URL and a derived Brand name so the user can upload product assets before any generation runs.
+
 ## Implemented (2026-04-29)
 - Backend endpoints: `/api/keys/test-anthropic`, `/api/keys/test-fal`, `/api/brands` CRUD, `/api/brands/{id}/research`, `/api/brands/{id}/generate`, `/api/brands/{id}/runs`.
 - BYOK pipeline using direct httpx → fal.run (sync) with concurrency=6.

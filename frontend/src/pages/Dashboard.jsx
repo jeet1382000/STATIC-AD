@@ -3,11 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import DropUrlInput from "../components/DropUrlInput";
 import BrandCard from "../components/BrandCard";
-import { api, keysStore } from "../lib/api";
+import { api } from "../lib/api";
 
 export default function Dashboard({ onOpenKeys }) {
   const [brands, setBrands] = useState([]);
-  const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sort, setSort] = useState("recent");
   const navigate = useNavigate();
@@ -25,26 +24,10 @@ export default function Dashboard({ onOpenKeys }) {
   };
   useEffect(() => { load(); }, []);
 
-  const onDrop = async (url) => {
-    if (!keysStore.has()) {
-      toast.error("Add your FAL & Anthropic keys first.");
-      onOpenKeys();
-      return;
-    }
-    setBusy(true);
-    try {
-      const host = url.replace(/^https?:\/\//, "").split("/")[0].split(".").slice(-2)[0] || "Untitled";
-      const name = host.charAt(0).toUpperCase() + host.slice(1);
-      const created = await api.createBrand({ name, url });
-      toast.success("Brand created — running research…");
-      await api.research(created.data.id);
-      toast.success("Identity extracted. Generating 15 ads…");
-      navigate(`/brands/${created.data.id}?autorun=1`);
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Pipeline failed");
-    } finally {
-      setBusy(false);
-    }
+  const onDrop = (url) => {
+    // Send the user to the New Brand wizard so they can upload assets
+    // before any research / generation kicks off.
+    navigate(`/brands/new?url=${encodeURIComponent(url)}`);
   };
 
   const onDelete = async (id) => {
@@ -73,7 +56,7 @@ export default function Dashboard({ onOpenKeys }) {
       </p>
 
       <div className="mt-10 max-w-3xl">
-        <DropUrlInput onSubmit={onDrop} busy={busy} />
+        <DropUrlInput onSubmit={onDrop} busy={false} />
       </div>
 
       <div className="mt-16 border-t border-ink pt-6 flex items-end justify-between mb-6">

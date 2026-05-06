@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, ArrowRight, UploadCloud, X } from "lucide-react";
 import { api, keysStore } from "../lib/api";
@@ -18,6 +18,7 @@ function fileToDataUrl(file) {
 
 export default function BrandNew({ onOpenKeys }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [step, setStep] = useState(1);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
@@ -27,6 +28,24 @@ export default function BrandNew({ onOpenKeys }) {
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInput = useRef(null);
+
+  // Prefill from ?url=… when the user lands here from the dashboard
+  // "Drop a brand URL" input.
+  useEffect(() => {
+    const incoming = searchParams.get("url");
+    if (!incoming) return;
+    setUrl((prev) => prev || incoming);
+    setName((prev) => {
+      if (prev) return prev;
+      try {
+        const host = incoming.replace(/^https?:\/\//, "").split("/")[0];
+        const root = host.split(".").slice(-2)[0] || "";
+        return root ? root.charAt(0).toUpperCase() + root.slice(1) : "";
+      } catch {
+        return "";
+      }
+    });
+  }, [searchParams]);
 
   const next = () => {
     if (step === 1 && (!name.trim() || !url.trim())) {
