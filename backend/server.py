@@ -318,12 +318,26 @@ async def _openai_edit(openai_key: str, product_image_data_url: str, prompt: str
 
     headers = {"Authorization": f"Bearer {openai_key}"}
     files = [("image", (f"product.{ext}", image_bytes, media_type))]
-    # Prepend a clean-output guard so the model doesn't reproduce website chrome
-    clean_prompt = (
-        "Clean professional ad creative — no website navigation bars, no browser headers, "
-        "no UI chrome, no dark header bands from the reference image. "
-        + prompt
+    # GLOBAL GUARDRAILS — applied to every /images/edits call regardless of template.
+    # The uploaded product image is the SOURCE OF TRUTH. We force the model to
+    # preserve it exactly and only generate the surrounding scene described by Claude.
+    preservation_prefix = (
+        "STRICT PRODUCT PRESERVATION (highest priority, overrides any conflicting instruction below): "
+        "The input reference image IS the product. Reproduce the product PIXEL-FAITHFUL — keep its "
+        "exact shape, silhouette, proportions, colors, materials, label, typography, packaging, "
+        "logos, text, finish, and orientation completely unchanged. Do NOT redraw, restyle, "
+        "redesign, recolor, relabel, replace, regenerate, or reinterpret the product. Do NOT add "
+        "or remove product features, ingredients, accessories, or variants. Treat the product as "
+        "a fixed photographic element to be composited as-is into the new scene. "
+        "SCOPE LOCK: Generate ONLY what the scene description below explicitly asks for — "
+        "background, surface, props, lighting, composition. No extra people, animals, text, "
+        "logos, badges, watermarks, UI chrome, browser/website elements, or decorative additions "
+        "beyond the prompt. "
+        "CLEAN OUTPUT: no website navigation bars, no browser headers, no UI chrome, no dark "
+        "header bands from the reference image. "
+        "SCENE TO COMPOSITE THE PRODUCT INTO: "
     )
+    clean_prompt = preservation_prefix + prompt
     data = {
         "model": OPENAI_IMAGE_MODEL,
         "prompt": clean_prompt,
@@ -795,15 +809,37 @@ async def _build_prompts(
             f"{t.name}: {t.scaffold}"
             for t in enabled
         )
-        system = (
-            "You are a world-class art director specialising in performance ad creatives. "
-            "For each provided template scaffold, write ONE vivid, production-ready image-generation "
-            "prompt (40-80 words, single paragraph) that adapts the scaffold to the brand palette, "
-            "photography style, and tone. "
-            f"{image_mode_instruction} "
-            "Describe a concrete scene: subject, composition, lighting, mood. Avoid rendered text. "
-            "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]} preserving template order."
-        )
+        if using_image_edit:
+            system = (
+                "You are a world-class art director writing image-generation prompts that will be "
+                "sent to OpenAI's /images/edits endpoint together with the user's actual product photo. "
+                f"{image_mode_instruction} "
+                "OUTPUT CONSTRAINTS for every prompt you write: "
+                "  • Single paragraph, 40-80 words. "
+                "  • Describe ONLY scene + staging + lighting + composition + mood around 'the product'. "
+                "  • NEVER describe the product's appearance (shape, colors, label, packaging, materials, "
+                "    ingredients, typography). Treat the product as an opaque fixed object. "
+                "  • NEVER use words that imply altering the product: 'redesign', 'restyle', 'recolor', "
+                "    'rebrand', 'redrawn', 'new packaging', 'variant', 'reimagined', 'stylised version'. "
+                "  • NEVER request rendered text, headlines, copy, badges, logos, or watermarks unless the "
+                "    template scaffold explicitly demands it — and even then, keep wording minimal. "
+                "  • STAY IN SCOPE of the template scaffold. Do not invent extra subjects, characters, "
+                "    or narrative elements that the scaffold does not call for. "
+                "Adapt each scaffold to the brand palette, photography style, and tone. "
+                "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]} preserving template order."
+            )
+        else:
+            system = (
+                "You are a world-class art director specialising in performance ad creatives. "
+                "For each provided template scaffold, write ONE vivid, production-ready image-generation "
+                "prompt (40-80 words, single paragraph) that adapts the scaffold to the brand palette, "
+                "photography style, and tone. "
+                f"{image_mode_instruction} "
+                "Describe a concrete scene: subject, composition, lighting, mood. Avoid rendered text. "
+                "Stay strictly within the scope of each template scaffold — do not invent extra subjects "
+                "or narrative elements not called for. "
+                "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]} preserving template order."
+            )
         user = f"""Brand: {brand.name}
 Product: {brand.product_name or "(brand-level campaign)"}
 {angle_line}
