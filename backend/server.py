@@ -763,12 +763,18 @@ async def _build_prompts(
     using_image_edit = bool(brand.product_images)
     if using_image_edit:
         image_mode_instruction = (
-            "IMPORTANT: The real product photo will be passed directly to the image model as a "
-            "reference image (images/edits endpoint). DO NOT describe the product's visual appearance "
-            "(colors, shape, label, packaging) — the model can already see it. "
-            "Instead, describe the SCENE, STAGING, and CONTEXT: background environment, surface/props, "
-            "lighting setup, composition, camera angle, and mood. "
-            "Refer to the product simply as 'the product' or 'this product'."
+            "GLOBAL RULE — APPLIES TO EVERY TEMPLATE (current or future, built-in or custom): "
+            "The user's uploaded product photo will be composited directly into every generated "
+            "creative via OpenAI's images/edits endpoint and is the SOURCE OF TRUTH. "
+            "DO NOT invent, substitute, or describe a replacement product. "
+            "DO NOT describe the product's visual appearance (colors, shape, label, packaging, "
+            "ingredients, materials) — the model already sees the real image. "
+            "Every scene you write MUST naturally accommodate and prominently feature this exact "
+            "product as-is, even if the template scaffold suggests it is optional or omits it. "
+            "Refer to the product simply as 'the product' or 'this product'. "
+            "Focus your prompt on SCENE, STAGING, and CONTEXT only: background environment, "
+            "surface/props, lighting setup, composition, camera angle, and mood — designed to "
+            "showcase the uploaded product."
         )
     else:
         image_mode_instruction = (
@@ -781,8 +787,11 @@ async def _build_prompts(
     enabled = [Template(**d) for d in tpl_docs][:15]
 
     if enabled:
+        # When a product image is uploaded, the "needs product" per-template hint is
+        # misleading — every template will composite the real product regardless. Suppress it.
         templates_block = "\n".join(
-            f"  №{t.number:02d} [{t.aspect} · {t.category}{' · needs product' if t.needs_product else ''}] "
+            f"  №{t.number:02d} [{t.aspect} · {t.category}"
+            f"{'' if using_image_edit else (' · needs product' if t.needs_product else '')}] "
             f"{t.name}: {t.scaffold}"
             for t in enabled
         )
@@ -855,8 +864,16 @@ async def _generate_images_background(
     product_images: Optional[List[str]] = None,
 ):
     """Background task: for each creative, call gpt-image-2.
-    - If product_images present → /images/edits (real product composited into scene)
-    - Otherwise → /images/generations (text-to-image)
+
+    GLOBAL RULE — uploaded product images are the source of truth:
+    If the user has uploaded any product photo, EVERY creative (built-in or
+    user-created template) is routed through OpenAI's /images/edits endpoint
+    so the actual product image is composited into the final scene as-is.
+    The template's `needs_product` flag is intentionally NOT consulted here —
+    the rule applies uniformly across all current and future templates.
+    Only when no product image was uploaded do we fall back to text-to-image
+    generation via /images/generations.
+
     Updates each creative in MongoDB as it completes.
     """
     # Use the first uploaded product image as the primary reference
