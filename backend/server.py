@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urljoin
 
 import anthropic
 import httpx
@@ -243,28 +244,137 @@ def _require_openai_key(x_openai_key: Optional[str]) -> str:
 
 
 async def _scrape_url(url: str) -> str:
+    """Aggressive brand-DNA scraper.
+
+    Pulls homepage + a couple of brand pages, inlines stylesheets, and surfaces
+    concrete font-family / color evidence so Claude can ground its analysis.
+    """
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as hc:
-            resp = await hc.get(url, headers={"User-Agent": "Mozilla/5.0 AdsStudio/1.0"})
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=headers) as hc:
+            resp = await hc.get(url)
             resp.raise_for_status()
+            base_url = str(resp.url)
             soup = BeautifulSoup(resp.text, "html.parser")
+
+            # ── 1. Meta / title / og ──
+            title = (soup.title.string if soup.title and soup.title.string else "").strip()
+            def _meta(name=None, prop=None) -> str:
+                if name:
+                    el = soup.find("meta", attrs={"name": name})
+                elif prop:
+                    el = soup.find("meta", attrs={"property": prop})
+                else:
+                    el = None
+                return (el.get("content") or "").strip() if el and el.get("content") else ""
+
+            meta_desc = _meta(name="description") or _meta(prop="og:description")
+            og_title = _meta(prop="og:title")
+            og_image = _meta(prop="og:image")
+            og_site = _meta(prop="og:site_name")
+            twitter_desc = _meta(name="twitter:description")
+
+            # ── 2. Inline <style> blocks BEFORE we strip them ──
+            inline_styles = " ".join(s.get_text(" ", strip=True) for s in soup.find_all("style"))[:30000]
+
+            # ── 3. External stylesheets (first 3, ~20KB each) ──
+            # Detect both rel=stylesheet AND rel=preload + as=style (Next.js / SPAs).
+            css_links: list[str] = []
+            for link in soup.find_all("link")[:80]:
+                rel = " ".join(link.get("rel", [])).lower()
+                as_attr = (link.get("as") or "").lower()
+                href = link.get("href") or ""
+                if not href:
+                    continue
+                is_stylesheet = "stylesheet" in rel or (rel == "preload" and as_attr == "style")
+                # Fallback: any .css URL
+                if not is_stylesheet and ".css" in href.split("?")[0]:
+                    is_stylesheet = True
+                if is_stylesheet:
+                    css_links.append(urljoin(base_url, href))
+                if len(css_links) >= 3:
+                    break
+
+            external_css = ""
+            for href in css_links:
+                try:
+                    r = await hc.get(href)
+                    if r.status_code == 200 and "css" in r.headers.get("content-type", "").lower():
+                        external_css += "\n/* " + href + " */\n" + r.text[:20000]
+                except Exception:
+                    continue
+            external_css = external_css[:60000]
+
+            # ── 4. Pull concrete font-family and color evidence from CSS ──
+            css_blob = (inline_styles + "\n" + external_css)[:80000]
+            # Both font-family declarations AND @font-face font-family names.
+            font_family_decls = re.findall(r"font-family\s*:\s*([^;{}]+)", css_blob, re.IGNORECASE)
+            font_face_names = re.findall(
+                r"@font-face\s*\{[^}]*?font-family\s*:\s*['\"]?([^;'\"{}]+?)['\"]?\s*[;}]",
+                css_blob, re.IGNORECASE | re.DOTALL,
+            )
+            font_families = sorted({f.strip().strip("'\"") for f in font_family_decls + font_face_names})[:25]
+            google_fonts = sorted(set(
+                m.group(1)
+                for m in re.finditer(r"fonts\.googleapis\.com/css2?\?family=([^&\"'\s)]+)", css_blob)
+            ))[:15]
+            hex_colors = sorted(set(
+                m.group(0).lower()
+                for m in re.finditer(r"#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b", css_blob)
+            ))[:50]
+            css_variables = re.findall(
+                r"(--[a-z0-9-]+)\s*:\s*([^;]{1,80});", css_blob, re.IGNORECASE
+            )[:60]
+            css_vars_str = "; ".join(f"{k}: {v.strip()}" for k, v in css_variables)
+
+            # ── 5. Strip scripts/styles for clean text content ──
             for tag in soup(["script", "style", "noscript"]):
                 tag.decompose()
+            text = re.sub(r"\s+", " ", soup.get_text(separator=" ", strip=True))[:6000]
 
-            title = (soup.title.string if soup.title and soup.title.string else "").strip()
-            meta_desc = ""
-            md = soup.find("meta", attrs={"name": "description"})
-            if md and md.get("content"):
-                meta_desc = md["content"]
-            og_desc = soup.find("meta", attrs={"property": "og:description"})
-            if og_desc and og_desc.get("content") and not meta_desc:
-                meta_desc = og_desc["content"]
+            # ── 6. Crawl a secondary brand page if obvious ──
+            secondary_text = ""
+            candidate_paths = ["/about", "/about-us", "/our-story", "/story", "/press"]
+            for path in candidate_paths:
+                try:
+                    r2 = await hc.get(urljoin(base_url, path))
+                    if r2.status_code == 200 and "text/html" in r2.headers.get("content-type", ""):
+                        s2 = BeautifulSoup(r2.text, "html.parser")
+                        for tag in s2(["script", "style", "noscript"]):
+                            tag.decompose()
+                        secondary_text = re.sub(r"\s+", " ", s2.get_text(" ", strip=True))[:3000]
+                        secondary_text = f"\n{path} EXCERPT: {secondary_text}"
+                        break
+                except Exception:
+                    continue
 
-            text = soup.get_text(separator=" ", strip=True)
-            text = re.sub(r"\s+", " ", text)[:5000]
-            return f"TITLE: {title}\nDESCRIPTION: {meta_desc}\nCONTENT: {text}"
+            return (
+                f"TITLE: {title}\n"
+                f"OG_SITE_NAME: {og_site}\n"
+                f"OG_TITLE: {og_title}\n"
+                f"DESCRIPTION: {meta_desc}\n"
+                f"TWITTER_DESC: {twitter_desc}\n"
+                f"OG_IMAGE: {og_image}\n"
+                f"\n=== CSS EVIDENCE (use these to ground fonts and colors) ===\n"
+                f"FONT_FAMILIES_FOUND: {font_families}\n"
+                f"GOOGLE_FONTS_LOADED: {google_fonts}\n"
+                f"HEX_COLORS_FOUND: {hex_colors}\n"
+                f"CSS_VARIABLES: {css_vars_str}\n"
+                f"\n=== HOMEPAGE TEXT ===\n{text}"
+                f"{secondary_text}"
+            )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)[:120]}")
 
@@ -577,65 +687,79 @@ async def brand_research(brand_id: str, x_anthropic_key: Optional[str] = Header(
     site = await _scrape_url(brand.url)
 
     system = (
-        "You are a senior brand strategist and visual designer. "
-        "Reverse-engineer a brand's full DNA — visual & verbal identity — from a website excerpt. "
+        "You are a senior brand strategist + visual designer doing DEEP brand reverse-engineering. "
+        "You will receive a website excerpt that includes CONCRETE CSS EVIDENCE: actual font-family "
+        "declarations, Google Fonts loaded, hex colors found in CSS, and CSS variables. "
+        "GROUNDING RULES (mandatory): "
+        "  • Every hex value you output MUST come from the HEX_COLORS_FOUND list — never invent colors. "
+        "  • Font names MUST come from FONT_FAMILIES_FOUND or GOOGLE_FONTS_LOADED — never guess. "
+        "  • If evidence is missing for a field, set it to an honest empty string \"\" — never fabricate. "
+        "  • Pick the PRIMARY color as the most brand-distinctive non-neutral hex; SECONDARY as the "
+        "    next supporting hue; ACCENT as the call-to-action or highlight color (often the boldest); "
+        "    NEUTRAL as the dominant near-white/near-black/cream. "
+        "  • For fonts: pick the display/heading family used in hero/banner, then the body family. "
+        "  • Strip generic fallbacks like 'sans-serif', '-apple-system', 'system-ui' when reporting. "
         "Always reply with a single valid JSON object — no prose, no markdown."
     )
-    user = f"""Analyze this website and extract the full brand DNA. Brand name: "{brand.name}".
+    user = f"""Analyze this website and extract the full brand DNA for "{brand.name}".
 
-Output ONLY this JSON shape (use empty strings or arrays if a field is unknown — never null):
+Be thorough and SPECIFIC — every field must reflect this brand, not generic advice.
+Use the CSS EVIDENCE block to ground colors and fonts. Use the homepage and secondary
+page text to ground tone, voice, positioning, and competitive differentiation.
+
+Output ONLY this JSON shape (use empty strings or arrays if a field is genuinely unknown — never null):
 {{
   "palette": {{ "primary": "#hex", "secondary": "#hex", "accent": "#hex", "neutral": "#hex" }},
-  "fonts": ["Display font", "Body font"],
-  "tone": "1-2 sentence description of the verbal tone",
-  "photography_style": "1-2 sentence description of the visual / photography direction",
-  "brand_voice": "1 sentence on how the brand sounds",
-  "keywords": ["five", "to", "eight", "evocative", "keywords"],
+  "fonts": ["Display font (with weight)", "Body font (with weight)"],
+  "tone": "2-3 sentence description of verbal tone with concrete examples from the copy",
+  "photography_style": "2-3 sentence description of visual / photography direction with specifics on lighting, framing, subjects",
+  "brand_voice": "1-2 sentences on how the brand sounds (e.g. 'warm, direct, no fluff — like a knowledgeable friend')",
+  "keywords": ["six", "to", "ten", "evocative", "brand-specific", "keywords"],
   "brand_overview": {{
-    "tagline": "their tagline or a representative one-liner",
-    "design_agency": "agency name or 'Unknown'",
-    "voice_adjectives": ["five", "voice", "adjectives"],
-    "positioning": "1-2 sentence positioning statement",
-    "competitive_differentiation": "1-2 sentence on what sets them apart"
+    "tagline": "their actual tagline pulled from the copy, or a representative one-liner",
+    "design_agency": "agency name if discoverable, else 'Unknown'",
+    "voice_adjectives": ["five", "to", "seven", "voice", "adjectives"],
+    "positioning": "2-3 sentence positioning statement grounded in the site copy",
+    "competitive_differentiation": "2-3 sentences on what genuinely sets them apart"
   }},
   "visual_system": {{
-    "primary_font": "primary font name + weight notes",
-    "secondary_font": "secondary font name + weight notes",
-    "primary_color": "#hex (description)",
-    "secondary_color": "#hex (description)",
-    "accent_color": "#hex (description)",
-    "background_colors": "description of background usage",
-    "cta_color_and_style": "color + button style notes"
+    "primary_font": "exact font name + weight notes (e.g. 'Inter, 700 for headlines')",
+    "secondary_font": "exact font name + weight notes",
+    "primary_color": "#hex (semantic description — e.g. 'deep terracotta, used on CTAs')",
+    "secondary_color": "#hex (semantic description)",
+    "accent_color": "#hex (semantic description)",
+    "background_colors": "concrete description of background usage (cream, white, gradient, etc.)",
+    "cta_color_and_style": "color + button style (pill, sharp, outlined, filled, hover behavior)"
   }},
   "photography_direction": {{
-    "lighting": "lighting description",
-    "color_grading": "grading description",
-    "composition": "composition rules",
-    "subject_matter": "what is photographed",
-    "props_and_surfaces": "common props and surfaces",
-    "mood": "overall mood"
+    "lighting": "specific lighting description (e.g. 'soft north-window daylight with gentle shadows')",
+    "color_grading": "grading description (e.g. 'warm highlights, slightly desaturated greens')",
+    "composition": "composition rules (e.g. 'centered hero shots, generous negative space, 4:5 framing')",
+    "subject_matter": "what is photographed (product alone? lifestyle? hands-in-frame?)",
+    "props_and_surfaces": "signature props and surface materials",
+    "mood": "overall mood in 1 sentence"
   }},
   "product_details": {{
-    "physical_description": "what the product looks like",
-    "label_logo_placement": "label and logo placement",
-    "distinctive_features": "distinctive product features",
-    "packaging_system": "packaging system description"
+    "physical_description": "what the product looks like — be specific about shape, materials, packaging",
+    "label_logo_placement": "where the label/logo sits on the product",
+    "distinctive_features": "what is visually distinctive",
+    "packaging_system": "describe the packaging system — bottles, boxes, color-coding"
   }},
   "ad_creative_style": {{
-    "typical_formats": "typical ad formats",
-    "text_overlay_style": "text overlay treatment",
+    "typical_formats": "typical ad formats observed (carousels, big headlines, lifestyle, testimonials)",
+    "text_overlay_style": "how text overlays are treated (size, alignment, font, color)",
     "photo_vs_illustration": "balance of photo vs illustration",
-    "ugc_usage": "how UGC is used",
-    "offer_presentation": "how offers are presented"
+    "ugc_usage": "how UGC is used (if at all)",
+    "offer_presentation": "how offers/discounts are presented"
   }},
-  "image_generation_modifier": "A single paragraph (~80 words) prompt-modifier to PREPEND to every ad-image prompt. Capture lighting, color grading, palette, type style, mood, and any signature props. Concrete, sensory, image-gen ready."
+  "image_generation_modifier": "A single paragraph (~80 words) that will be PREPENDED to every ad-image prompt. Capture lighting, color grading, exact palette hexes, type style, mood, signature props. Concrete, sensory, image-gen ready — name the colors and the lighting setup explicitly."
 }}
 
 Website excerpt:
 \"\"\"
 {site}
 \"\"\""""
-    raw = await _claude_call(api_key, system, user, max_tokens=2400)
+    raw = await _claude_call(api_key, system, user, max_tokens=3500)
     try:
         identity = BrandIdentity(**_extract_json(raw))
     except Exception as e:
