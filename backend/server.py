@@ -890,8 +890,11 @@ async def _full_pipeline_background(
         logger.info("Run %s: %d prompts saved, starting image generation", run_id, len(creatives))
 
         # ── Step 3: Images ──
+        brand_modifier = ""
+        if brand.identity and brand.identity.image_generation_modifier:
+            brand_modifier = brand.identity.image_generation_modifier
         await _generate_images_background(
-            run_id, creatives, o_key, quality, brand.product_images or None
+            run_id, creatives, o_key, quality, brand.product_images or None, brand_modifier
         )
 
     except Exception as e:
@@ -927,9 +930,13 @@ async def _build_prompts(
         photos_line = "Reference photos: none."
 
     modifier = (brand.identity.image_generation_modifier or "").strip()
+    # NOTE: the brand modifier is prepended programmatically before each OpenAI
+    # call (see _generate_images_background → _openai_edit/_openai_generate),
+    # NOT by Claude. Asking Claude to repeat the modifier verbatim in all 15
+    # prompts inflated the response past max_tokens and truncated the JSON.
     modifier_line = (
-        f"\n\nIMPORTANT: prepend this exact paragraph to every prompt as the first sentences "
-        f"(verbatim, then your scene):\n\"\"\"{modifier}\"\"\"\n"
+        f"\n\nBRAND VISUAL STYLE (already enforced downstream — do NOT repeat in your prompts; "
+        f"just write scenes that are stylistically consistent with it):\n\"\"\"{modifier}\"\"\"\n"
         if modifier else ""
     )
 
@@ -1041,7 +1048,7 @@ Brand identity:
 Return 15 prompts."""
         target_count = 15
 
-    raw = await _claude_call(a_key, system, user, max_tokens=4000)
+    raw = await _claude_call(a_key, system, user, max_tokens=8000)
     try:
         prompts = _extract_json(raw).get("prompts", [])
         prompts = [p.strip() for p in prompts if isinstance(p, str) and p.strip()][:target_count]
@@ -1065,6 +1072,7 @@ async def _generate_images_background(
     o_key: str,
     quality: str,
     product_images: Optional[List[str]] = None,
+    brand_modifier: str = "",
 ):
     """Background task: for each creative, call gpt-image-2.
 
@@ -1077,6 +1085,10 @@ async def _generate_images_background(
     Only when no product image was uploaded do we fall back to text-to-image
     generation via /images/generations.
 
+    `brand_modifier` is the per-brand visual-style paragraph from research; it
+    is prepended ONCE here (not by Claude) so every image is stylistically
+    consistent without inflating the Claude response.
+
     Updates each creative in MongoDB as it completes.
     """
     # Use the first uploaded product image as the primary reference
@@ -1085,14 +1097,16 @@ async def _generate_images_background(
     logger.info("Run %s: image mode=%s, %d creatives", run_id, mode, len(creatives))
 
     sem = asyncio.Semaphore(4)
+    style_prefix = (brand_modifier.strip() + " ") if brand_modifier and brand_modifier.strip() else ""
 
     async def worker(creative: AdCreative):
         size = _aspect_to_openai_size(creative.aspect)
+        styled_prompt = style_prefix + creative.prompt
         async with sem:
             if primary_product_image:
-                res = await _openai_edit(o_key, primary_product_image, creative.prompt, size=size, quality=quality)
+                res = await _openai_edit(o_key, primary_product_image, styled_prompt, size=size, quality=quality)
             else:
-                res = await _openai_generate(o_key, creative.prompt, size=size, quality=quality)
+                res = await _openai_generate(o_key, styled_prompt, size=size, quality=quality)
         if "url" in res:
             await db.ad_runs.update_one(
                 {"id": run_id, "creatives.id": creative.id},
