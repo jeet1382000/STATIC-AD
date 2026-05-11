@@ -380,15 +380,51 @@ async def _scrape_url(url: str) -> str:
 
 
 def _extract_json(text: str) -> dict:
+    """Robust JSON extractor for Claude responses.
+
+    Handles:
+    - Plain JSON: {"prompts": [...]}
+    - Fenced JSON: ```json\n{...}\n```
+    - Fenced WITHOUT outer braces: ```json\n"prompts": [...]\n```  (Claude sometimes does this)
+    - Bare body without braces: "prompts": [...]
+    """
     text = text.strip()
-    # Strip code fences if present
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+
+    # 1. Strip code fences first — Claude often wraps output in ```json … ```
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
     if fenced:
-        text = fenced.group(1)
-    else:
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if m:
-            text = m.group(0)
+        text = fenced.group(1).strip()
+
+    # 2. Try direct parse
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 3. Try slicing to outer braces
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    # 4. Body without outer braces (e.g. '"prompts": [...]') — wrap and retry
+    if re.match(r'^\s*"[^"]+"\s*:', text):
+        try:
+            return json.loads("{" + text.rstrip(", \n\t") + "}")
+        except json.JSONDecodeError:
+            pass
+
+    # 5. Last resort: pull a bare prompts array if visible
+    arr = re.search(r'"prompts"\s*:\s*(\[.*\])', text, re.DOTALL)
+    if arr:
+        try:
+            return {"prompts": json.loads(arr.group(1))}
+        except json.JSONDecodeError:
+            pass
+
+    # Re-raise the original error to surface clearly upstream
     return json.loads(text)
 
 
@@ -950,7 +986,10 @@ async def _build_prompts(
                 "  • STAY IN SCOPE of the template scaffold. Do not invent extra subjects, characters, "
                 "    or narrative elements that the scaffold does not call for. "
                 "Adapt each scaffold to the brand palette, photography style, and tone. "
-                "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]} preserving template order."
+                "OUTPUT FORMAT (strict): Reply with ONLY a single valid JSON object. The response "
+                "MUST start with the character `{` and end with the character `}`. Do not wrap it "
+                "in markdown fences, do not add any prose before or after. The exact shape is: "
+                "{\"prompts\": [\"prompt 1\", \"prompt 2\", ...]}. Preserve template order."
             )
         else:
             system = (
@@ -962,7 +1001,9 @@ async def _build_prompts(
                 "Describe a concrete scene: subject, composition, lighting, mood. Avoid rendered text. "
                 "Stay strictly within the scope of each template scaffold — do not invent extra subjects "
                 "or narrative elements not called for. "
-                "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]} preserving template order."
+                "OUTPUT FORMAT (strict): Reply with ONLY a single valid JSON object starting with `{` "
+                "and ending with `}`. No markdown fences, no prose. Shape: "
+                "{\"prompts\": [\"prompt 1\", \"prompt 2\", ...]}. Preserve template order."
             )
         user = f"""Brand: {brand.name}
 Product: {brand.product_name or "(brand-level campaign)"}
@@ -985,7 +1026,9 @@ Return exactly {len(enabled)} prompts, in the same order as the templates above.
             "style, and tone, and describe a concrete scene with subject, composition, lighting, and mood. "
             f"{image_mode_instruction} "
             "Avoid text overlays. Vary scenes drastically across the 15. "
-            "Reply with ONLY a JSON object: {\"prompts\": [\"...\", \"...\", ...]}."
+            "OUTPUT FORMAT (strict): Reply with ONLY a single valid JSON object starting with `{` "
+            "and ending with `}`. No markdown fences, no prose. Shape: "
+            "{\"prompts\": [\"prompt 1\", \"prompt 2\", ...]}."
         )
         user = f"""Brand: {brand.name}
 Product: {brand.product_name or "(brand-level campaign)"}
