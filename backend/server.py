@@ -142,6 +142,8 @@ class Brand(BaseModel):
     product_name: Optional[str] = None
     product_images: List[str] = []
     identity: Optional[BrandIdentity] = None
+    logo_url: Optional[str] = None         # absolute URL where the logo was scraped from
+    logo_data_url: Optional[str] = None    # base64 data URL of the scraped logo (passed to OpenAI as 2nd image)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     cover_color: Optional[str] = None
     # Derived fields populated by list_brands (defaults so single-brand fetch keeps working)
@@ -508,10 +510,140 @@ async def _claude_call(api_key: str, system: str, user: str, max_tokens: int = 1
     return await asyncio.to_thread(_run)
 
 
-async def _openai_edit(openai_key: str, product_image_data_url: str, prompt: str, size: str = "1024x1024", quality: str = "medium") -> dict:
-    """Call OpenAI gpt-image-2 /images/edits — composites the real uploaded product image into the scene.
+async def _scrape_logo(brand_url: str) -> tuple[Optional[str], Optional[str]]:
+    """Try to discover and download the brand's logo from its homepage.
 
-    Falls back to _openai_generate if the image data URL is invalid or the edit call fails.
+    Returns (absolute_logo_url, base64_data_url) or (None, None) if nothing
+    suitable found. We prefer SVG / PNG / WEBP under ~600KB; skip oversized
+    hero images and decorative banners.
+
+    Detection priority:
+      1. <link rel="icon"|"apple-touch-icon"|"mask-icon"> SVG/PNG entries
+      2. <header>/nav <img> whose alt or src contains the word "logo"/"wordmark"
+      3. og:image / og:logo / twitter:image as a last fallback
+    """
+    if not brand_url.startswith(("http://", "https://")):
+        brand_url = "https://" + brand_url
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=headers) as hc:
+            r = await hc.get(brand_url)
+            if r.status_code >= 400:
+                return None, None
+            base_url = str(r.url)
+            soup = BeautifulSoup(r.text, "html.parser")
+
+            candidates: list[str] = []
+
+            # Priority 1: <link rel="icon"|"mask-icon"|"apple-touch-icon">
+            for link in soup.find_all("link", attrs={"rel": True}):
+                rel = " ".join(link.get("rel", [])).lower()
+                href = (link.get("href") or "").strip()
+                if not href:
+                    continue
+                if any(k in rel for k in ("icon", "mask-icon", "apple-touch-icon")):
+                    sizes = (link.get("sizes") or "").lower()
+                    if sizes in ("16x16", "32x32"):
+                        # skip tiny generic favicons
+                        continue
+                    candidates.append(urljoin(base_url, href))
+
+            # Priority 2: <img> tags whose src or alt strongly suggests a logo
+            for img in soup.find_all("img"):
+                src = (img.get("src") or img.get("data-src") or "").strip()
+                alt = (img.get("alt") or "").lower()
+                if not src:
+                    continue
+                if src.startswith("data:") or src.startswith("javascript:"):
+                    continue
+                joined = urljoin(base_url, src)
+                src_l = joined.lower()
+                if "logo" in alt or "logo" in src_l or "wordmark" in src_l:
+                    candidates.append(joined)
+
+            # Priority 3: og:image / og:logo / twitter:image
+            for prop in ("og:image", "og:logo", "twitter:image"):
+                el = soup.find("meta", attrs={"property": prop}) or soup.find("meta", attrs={"name": prop})
+                if el and el.get("content"):
+                    candidates.append(urljoin(base_url, el["content"]))
+
+            seen: set[str] = set()
+            unique: list[str] = []
+            for c in candidates:
+                if c not in seen:
+                    seen.add(c)
+                    unique.append(c)
+
+            for cand in unique[:10]:
+                try:
+                    ir = await hc.get(cand)
+                except Exception:
+                    continue
+                if ir.status_code != 200:
+                    continue
+                ctype = (ir.headers.get("content-type") or "").lower().split(";")[0].strip()
+                if not ctype.startswith("image/"):
+                    ext = cand.rsplit(".", 1)[-1].lower().split("?")[0]
+                    ctype = {
+                        "svg": "image/svg+xml",
+                        "png": "image/png",
+                        "jpg": "image/jpeg",
+                        "jpeg": "image/jpeg",
+                        "webp": "image/webp",
+                        "ico": "image/x-icon",
+                    }.get(ext)
+                    if not ctype:
+                        continue
+                body = ir.content
+                if not body or len(body) > 600_000 or len(body) < 200:
+                    continue
+                # gpt-image-2 accepts PNG / JPG / WEBP. SVG must be rasterized first.
+                if ctype == "image/svg+xml":
+                    try:
+                        from cairosvg import svg2png  # type: ignore
+                        body = svg2png(bytestring=body, output_width=512)
+                        ctype = "image/png"
+                    except Exception:
+                        continue
+                # Skip ICO too — model accepts PNG/JPG/WEBP best
+                if ctype == "image/x-icon":
+                    continue
+                b64 = base64.b64encode(body).decode("ascii")
+                return cand, f"data:{ctype};base64,{b64}"
+
+            return None, None
+    except Exception as e:
+        logger.warning("Logo scrape failed for %s: %s", brand_url, e)
+        return None, None
+
+
+async def _openai_edit(
+    openai_key: str,
+    product_image_data_url: str,
+    prompt: str,
+    size: str = "1024x1024",
+    quality: str = "medium",
+    logo_data_url: Optional[str] = None,
+) -> dict:
+    """Call OpenAI gpt-image-2 /images/edits — composites the real uploaded product image
+    (and optionally the scraped brand logo) into the scene.
+
+    When `logo_data_url` is provided, it is passed as a SECOND `image` form field.
+    The preservation prefix is adjusted so the model knows:
+      • image #1 = product (PIXEL-FAITHFUL preservation)
+      • image #2 = brand logo (composite faithfully wherever the prompt asks for a wordmark / logo / brand mark)
+
+    Falls back to _openai_generate if the product image data URL is invalid or the edit call fails.
     """
     match = re.match(r"data:([^;]+);base64,(.+)", product_image_data_url, re.DOTALL)
     if not match:
@@ -528,29 +660,73 @@ async def _openai_edit(openai_key: str, product_image_data_url: str, prompt: str
     ext = "png" if "png" in media_type else ("jpg" if "jpeg" in media_type else "webp" if "webp" in media_type else "png")
 
     headers = {"Authorization": f"Bearer {openai_key}"}
-    files = [("image", (f"product.{ext}", image_bytes, media_type))]
+    files: list[tuple[str, tuple[str, bytes, str]]] = [
+        ("image", (f"product.{ext}", image_bytes, media_type)),
+    ]
+
+    # Try to attach the scraped logo as a SECOND reference image.
+    logo_attached = False
+    if logo_data_url:
+        lmatch = re.match(r"data:([^;]+);base64,(.+)", logo_data_url, re.DOTALL)
+        if lmatch:
+            l_media = lmatch.group(1)
+            try:
+                l_bytes = base64.b64decode(lmatch.group(2).strip())
+                l_ext = "png" if "png" in l_media else ("jpg" if "jpeg" in l_media else "webp" if "webp" in l_media else "png")
+                files.append(("image", (f"logo.{l_ext}", l_bytes, l_media)))
+                logo_attached = True
+            except Exception as e:
+                logger.warning("Failed to decode logo data URL: %s — proceeding without logo", e)
+
     # GLOBAL GUARDRAILS — applied to every /images/edits call regardless of template.
-    # The uploaded product image is the SOURCE OF TRUTH. We force the model to
-    # preserve it exactly and only generate the surrounding scene described by Claude.
-    preservation_prefix = (
-        "STRICT PRODUCT PRESERVATION (highest priority, overrides any conflicting instruction below): "
-        "The input reference image IS the product. Reproduce the product PIXEL-FAITHFUL — keep its "
-        "exact shape, silhouette, proportions, colors, materials, label, typography, packaging, "
-        "logos, text, finish, and orientation completely unchanged. Do NOT redraw, restyle, "
-        "redesign, recolor, relabel, replace, regenerate, or reinterpret the product. Do NOT add "
-        "or remove product features, ingredients, accessories, or variants. Treat the product as "
-        "a fixed photographic element to be composited as-is into the new scene. "
-        "SCOPE LOCK: Render exactly the scene described below — including ALL HEADLINES, BODY COPY, "
-        "BADGES, CALLOUTS, CTAs, AND OTHER TYPOGRAPHY the prompt specifies. Render every text string "
-        "the prompt names in quotation marks, faithfully and legibly, using the type weights/sizes/"
-        "colors the prompt calls for. Do NOT add any EXTRA people, animals, text, logos, watermarks, "
-        "UI chrome, browser/website elements, or decorative additions that the prompt does not "
-        "explicitly request. (Note: 'no extra text' means do not invent additional words beyond what "
-        "the prompt specifies — it does NOT mean omit the headlines/copy the prompt asks for.) "
-        "CLEAN OUTPUT: no website navigation bars, no browser headers, no UI chrome, no dark "
-        "header bands from the reference image. "
-        "SCENE TO COMPOSITE THE PRODUCT INTO: "
-    )
+    if logo_attached:
+        preservation_prefix = (
+            "TWO REFERENCE IMAGES are provided. "
+            "IMAGE #1 = THE PRODUCT (STRICT PIXEL-FAITHFUL PRESERVATION, highest priority): "
+            "Reproduce the product PIXEL-FAITHFUL — keep its exact shape, silhouette, proportions, colors, "
+            "materials, label, typography, packaging, on-product logos, on-product text, finish, and "
+            "orientation completely unchanged. Do NOT redraw, restyle, redesign, recolor, relabel, replace, "
+            "regenerate, or reinterpret the product. Treat the product as a fixed photographic element. "
+            "IMAGE #2 = THE OFFICIAL BRAND LOGO / WORDMARK: "
+            "Wherever the scene description below asks for a brand wordmark, brand logo, brand pill, "
+            "brand mark, masthead logo, sticker, or any reference to '[BRAND NAME]' as a graphic element, "
+            "you MUST composite IMAGE #2 faithfully — keep its exact letterforms, colors, and proportions. "
+            "Do NOT invent a substitute wordmark, do not approximate the lettering, do not transcribe the "
+            "brand name in a different typeface. Resize and place the logo per the prompt's spec, but the "
+            "logo artwork itself is fixed. Add a subtle white or brand-neutral background pill behind the "
+            "logo only if the prompt explicitly asks for it. "
+            "SCOPE LOCK: Render exactly the scene described below — including ALL HEADLINES, BODY COPY, "
+            "BADGES, CALLOUTS, CTAs, AND OTHER TYPOGRAPHY the prompt specifies. Render every text string "
+            "the prompt names in quotation marks, faithfully and legibly, using the type weights/sizes/"
+            "colors the prompt calls for. Do NOT add any EXTRA people, animals, text, watermarks, "
+            "UI chrome, browser/website elements, or decorative additions that the prompt does not "
+            "explicitly request. (Note: 'no extra text' means do not invent additional words beyond what "
+            "the prompt specifies — it does NOT mean omit the headlines/copy the prompt asks for, and "
+            "it does NOT mean omit the brand logo from image #2.) "
+            "CLEAN OUTPUT: no website navigation bars, no browser headers, no UI chrome, no dark "
+            "header bands from the reference images. "
+            "SCENE TO COMPOSITE THE PRODUCT AND LOGO INTO: "
+        )
+    else:
+        preservation_prefix = (
+            "STRICT PRODUCT PRESERVATION (highest priority, overrides any conflicting instruction below): "
+            "The input reference image IS the product. Reproduce the product PIXEL-FAITHFUL — keep its "
+            "exact shape, silhouette, proportions, colors, materials, label, typography, packaging, "
+            "logos, text, finish, and orientation completely unchanged. Do NOT redraw, restyle, "
+            "redesign, recolor, relabel, replace, regenerate, or reinterpret the product. Do NOT add "
+            "or remove product features, ingredients, accessories, or variants. Treat the product as "
+            "a fixed photographic element to be composited as-is into the new scene. "
+            "SCOPE LOCK: Render exactly the scene described below — including ALL HEADLINES, BODY COPY, "
+            "BADGES, CALLOUTS, CTAs, AND OTHER TYPOGRAPHY the prompt specifies. Render every text string "
+            "the prompt names in quotation marks, faithfully and legibly, using the type weights/sizes/"
+            "colors the prompt calls for. Do NOT add any EXTRA people, animals, text, logos, watermarks, "
+            "UI chrome, browser/website elements, or decorative additions that the prompt does not "
+            "explicitly request. (Note: 'no extra text' means do not invent additional words beyond what "
+            "the prompt specifies — it does NOT mean omit the headlines/copy the prompt asks for.) "
+            "CLEAN OUTPUT: no website navigation bars, no browser headers, no UI chrome, no dark "
+            "header bands from the reference image. "
+            "SCENE TO COMPOSITE THE PRODUCT INTO: "
+        )
     clean_prompt = preservation_prefix + prompt
     data = {
         "model": OPENAI_IMAGE_MODEL,
@@ -789,6 +965,12 @@ async def brand_research(brand_id: str, x_anthropic_key: Optional[str] = Header(
     brand = Brand(**doc)
 
     site = await _scrape_url(brand.url)
+    # Logo scrape runs in parallel with no fatal effect if it fails
+    logo_url, logo_data_url = await _scrape_logo(brand.url)
+    if logo_url:
+        logger.info("Logo scraped for %s → %s (%d bytes data url)", brand.name, logo_url, len(logo_data_url or ""))
+    else:
+        logger.info("No logo found for %s", brand.name)
 
     system = (
         "You are a senior brand strategist + visual designer doing DEEP brand reverse-engineering. "
@@ -872,7 +1054,12 @@ Website excerpt:
 
     await db.brands.update_one(
         {"id": brand_id},
-        {"$set": {"identity": identity.model_dump(), "cover_color": identity.palette.accent}},
+        {"$set": {
+            "identity": identity.model_dump(),
+            "cover_color": identity.palette.accent,
+            "logo_url": logo_url,
+            "logo_data_url": logo_data_url,
+        }},
     )
     updated = await db.brands.find_one({"id": brand_id}, {"_id": 0})
     return Brand(**updated)
@@ -967,7 +1154,8 @@ async def regenerate_single_creative(
 
     asyncio.create_task(
         _generate_images_background(
-            run_id, [creative], o_key, oai_quality, brand.product_images or None, brand_modifier
+            run_id, [creative], o_key, oai_quality,
+            brand.product_images or None, brand_modifier, brand.logo_data_url,
         )
     )
 
@@ -1019,7 +1207,8 @@ async def _full_pipeline_background(
         if brand.identity and brand.identity.image_generation_modifier:
             brand_modifier = brand.identity.image_generation_modifier
         await _generate_images_background(
-            run_id, creatives, o_key, quality, brand.product_images or None, brand_modifier
+            run_id, creatives, o_key, quality,
+            brand.product_images or None, brand_modifier, brand.logo_data_url,
         )
 
     except Exception as e:
@@ -1123,6 +1312,22 @@ async def _build_prompts(
                 "    checkout when you buy 2 or more.\"). Do not output bracketed placeholders like "
                 "    [HEADLINE] or [CTA TEXT] — replace them with real copy. Do not leave the scaffold's "
                 "    example text untouched if it doesn't fit the brand. "
+                "  • CTA IS MANDATORY for every template that could plausibly carry one (Headline, Offer, "
+                "    Bait-and-Switch, Stat Surround, Manifesto, Lifestyle UGC, Bundle, Tower, Curved-Type, "
+                "    and any future user-created template that names an action/button/pill). When the "
+                "    scaffold does NOT explicitly forbid a CTA, include a short verb-forward CTA pill at "
+                "    the bottom of the composition — e.g. 'SHOP NOW', 'TRY IT TODAY', 'GET YOURS', "
+                "    'ADD TO BAG', 'JOIN THE CLUB'. Specify its style: rounded-pill button, brand primary "
+                "    or accent fill, white tracked-caps body type ~14pt. ONLY omit the CTA when the "
+                "    template is a pure editorial/testimonial format that explicitly forbids commercial "
+                "    elements (Press Editorial, Faux iPhone Screenshot, Review Card). "
+                "  • LOGO IS THE SCRAPED ACTUAL LOGO — image #2 of the reference inputs. Whenever your "
+                "    prompt references a brand wordmark, brand logo, brand pill, brand mark, masthead "
+                "    sticker, or anything written as '[BRAND NAME]' as a graphic element, instruct the "
+                "    model to composite IMAGE #2 (the brand's actual logo) — do NOT instruct the model "
+                "    to typeset the brand name as if it were ordinary text. Write phrases like 'composite "
+                "    the brand logo from image #2 onto a small rounded-pill background, bottom-right, "
+                "    ~50px tall' instead of 'render the wordmark BOBBI in serif type'. "
                 "  • Specify type weight + alignment for each rendered string (e.g. 'extra-bold display "
                 "    sans, all caps, tight tracking, left-aligned'). "
                 "  • STAY IN SCOPE of the template scaffold. Do not invent extra subjects, characters, "
@@ -1208,6 +1413,7 @@ async def _generate_images_background(
     quality: str,
     product_images: Optional[List[str]] = None,
     brand_modifier: str = "",
+    logo_data_url: Optional[str] = None,
 ):
     """Background task: for each creative, call gpt-image-2.
 
@@ -1224,11 +1430,15 @@ async def _generate_images_background(
     is prepended ONCE here (not by Claude) so every image is stylistically
     consistent without inflating the Claude response.
 
+    `logo_data_url` is the scraped brand logo (base64 data URL). When provided,
+    it's attached as a SECOND reference image so the model composites the
+    real logo wherever the prompt asks for a wordmark / brand mark.
+
     Updates each creative in MongoDB as it completes.
     """
     # Use the first uploaded product image as the primary reference
     primary_product_image = (product_images[0] if product_images else None)
-    mode = "edit" if primary_product_image else "generate"
+    mode = "edit+logo" if (primary_product_image and logo_data_url) else ("edit" if primary_product_image else "generate")
     logger.info("Run %s: image mode=%s, %d creatives", run_id, mode, len(creatives))
 
     sem = asyncio.Semaphore(4)
@@ -1239,7 +1449,14 @@ async def _generate_images_background(
         styled_prompt = style_prefix + creative.prompt
         async with sem:
             if primary_product_image:
-                res = await _openai_edit(o_key, primary_product_image, styled_prompt, size=size, quality=quality)
+                res = await _openai_edit(
+                    o_key,
+                    primary_product_image,
+                    styled_prompt,
+                    size=size,
+                    quality=quality,
+                    logo_data_url=logo_data_url,
+                )
             else:
                 res = await _openai_generate(o_key, styled_prompt, size=size, quality=quality)
         if "url" in res:
