@@ -256,6 +256,10 @@ async def _scrape_url(url: str) -> str:
 
     Pulls homepage + a couple of brand pages, inlines stylesheets, and surfaces
     concrete font-family / color evidence so Claude can ground its analysis.
+
+    Rate-limit aware: small delays between secondary fetches and exponential
+    backoff on 429 Too Many Requests so the research call survives sites
+    that throttle aggressively.
     """
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -265,13 +269,56 @@ async def _scrape_url(url: str) -> str:
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,image/apng,*/*;q=0.8"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+        "Cache-Control": "max-age=0",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
     }
+
+    async def _polite_get(hc: httpx.AsyncClient, target: str, *, retries: int = 2) -> Optional[httpx.Response]:
+        """GET with backoff on 429. Returns None on permanent failure."""
+        for attempt in range(retries + 1):
+            try:
+                r = await hc.get(target)
+            except Exception:
+                return None
+            if r.status_code == 429:
+                # Respect Retry-After when present, else exponential backoff
+                ra = r.headers.get("Retry-After")
+                try:
+                    delay = float(ra) if ra is not None else 1.0 * (2 ** attempt)
+                except ValueError:
+                    delay = 1.0 * (2 ** attempt)
+                delay = min(delay, 4.0)
+                if attempt < retries:
+                    await asyncio.sleep(delay)
+                    continue
+            return r
+        return None
 
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=headers) as hc:
-            resp = await hc.get(url)
-            resp.raise_for_status()
+            resp = await _polite_get(hc, url)
+            if resp is None or resp.status_code >= 400:
+                code = resp.status_code if resp is not None else "no response"
+                # Surface a friendlier error for 429 so the user knows it's the site, not the app
+                if resp is not None and resp.status_code == 429:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="The brand site is rate-limiting our scraper (HTTP 429). Try again in a minute or use a different URL.",
+                    )
+                raise HTTPException(status_code=400, detail=f"Failed to fetch URL (HTTP {code})")
             base_url = str(resp.url)
             soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -295,7 +342,7 @@ async def _scrape_url(url: str) -> str:
             # ── 2. Inline <style> blocks BEFORE we strip them ──
             inline_styles = " ".join(s.get_text(" ", strip=True) for s in soup.find_all("style"))[:30000]
 
-            # ── 3. External stylesheets (first 3, ~20KB each) ──
+            # ── 3. External stylesheets (first 2 — fewer requests = less likely to trip rate limits) ──
             # Detect both rel=stylesheet AND rel=preload + as=style (Next.js / SPAs).
             css_links: list[str] = []
             for link in soup.find_all("link")[:80]:
@@ -310,17 +357,17 @@ async def _scrape_url(url: str) -> str:
                     is_stylesheet = True
                 if is_stylesheet:
                     css_links.append(urljoin(base_url, href))
-                if len(css_links) >= 3:
+                if len(css_links) >= 2:
                     break
 
             external_css = ""
             for href in css_links:
-                try:
-                    r = await hc.get(href)
-                    if r.status_code == 200 and "css" in r.headers.get("content-type", "").lower():
-                        external_css += "\n/* " + href + " */\n" + r.text[:20000]
-                except Exception:
+                await asyncio.sleep(0.3)  # be polite — small inter-request gap
+                r = await _polite_get(hc, href, retries=1)
+                if r is None or r.status_code != 200:
                     continue
+                if "css" in r.headers.get("content-type", "").lower():
+                    external_css += "\n/* " + href + " */\n" + r.text[:20000]
             external_css = external_css[:60000]
 
             # ── 4. Pull concrete font-family and color evidence from CSS ──
@@ -350,21 +397,23 @@ async def _scrape_url(url: str) -> str:
                 tag.decompose()
             text = re.sub(r"\s+", " ", soup.get_text(separator=" ", strip=True))[:6000]
 
-            # ── 6. Crawl a secondary brand page if obvious ──
+            # ── 6. Crawl ONE secondary brand page (was 5 — now 2 max, with polite delay) ──
+            # Sequential 5-page probes were a key cause of 429s on smaller stores.
             secondary_text = ""
-            candidate_paths = ["/about", "/about-us", "/our-story", "/story", "/press"]
-            for path in candidate_paths:
-                try:
-                    r2 = await hc.get(urljoin(base_url, path))
-                    if r2.status_code == 200 and "text/html" in r2.headers.get("content-type", ""):
-                        s2 = BeautifulSoup(r2.text, "html.parser")
-                        for tag in s2(["script", "style", "noscript"]):
-                            tag.decompose()
-                        secondary_text = re.sub(r"\s+", " ", s2.get_text(" ", strip=True))[:3000]
-                        secondary_text = f"\n{path} EXCERPT: {secondary_text}"
-                        break
-                except Exception:
+            for path in ("/about", "/our-story"):
+                await asyncio.sleep(0.4)
+                r2 = await _polite_get(hc, urljoin(base_url, path), retries=1)
+                if r2 is None:
                     continue
+                if r2.status_code == 429:
+                    break  # site is throttling — stop crawling, we have enough
+                if r2.status_code == 200 and "text/html" in r2.headers.get("content-type", ""):
+                    s2 = BeautifulSoup(r2.text, "html.parser")
+                    for tag in s2(["script", "style", "noscript"]):
+                        tag.decompose()
+                    secondary_text = re.sub(r"\s+", " ", s2.get_text(" ", strip=True))[:3000]
+                    secondary_text = f"\n{path} EXCERPT: {secondary_text}"
+                    break
 
             return (
                 f"TITLE: {title}\n"
