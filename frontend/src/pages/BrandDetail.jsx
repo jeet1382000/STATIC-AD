@@ -146,6 +146,23 @@ export default function BrandDetail({ onOpenKeys }) {
     { id: "gallery", label: `Gallery (${renderedImages})` },
   ];
 
+  const onRegenerateOne = async (creativeId) => {
+    if (!latestRun?.id) return;
+    if (!keysStore.has()) { toast.error("Add your keys first."); onOpenKeys(); return; }
+    // Optimistically clear the tile so the UI flips to 'rendering…' immediately
+    setRuns((prev) => prev.map((r) => r.id !== latestRun.id ? r : ({
+      ...r,
+      creatives: r.creatives.map((c) => c.id === creativeId ? { ...c, image_url: null, error: null } : c),
+    })));
+    try {
+      await api.regenerateOne(latestRun.id, creativeId);
+      toast.success("Regenerating that creative…");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Regenerate failed");
+      await load();
+    }
+  };
+
   return (
     <div className="flex flex-col min-h-screen">
       {/* Top bar */}
@@ -247,7 +264,7 @@ export default function BrandDetail({ onOpenKeys }) {
           <div className="px-8 py-8">
             {tab === "dna" && <BrandDNAView brand={brand} onRegenerate={onResearch} busy={generating} />}
             {tab === "prompts" && <PromptsView run={latestRun} expanded={expanded} setExpanded={setExpanded} onRegenerate={() => onGenerate()} busy={generating} />}
-            {tab === "gallery" && <GalleryView run={latestRun} onRegenerate={() => onGenerate()} />}
+            {tab === "gallery" && <GalleryView run={latestRun} onRegenerate={() => onGenerate()} onRegenerateOne={onRegenerateOne} />}
           </div>
         </section>
       </div>
@@ -443,7 +460,7 @@ function NeedsPill({ needs }) {
 }
 
 // ===================== Gallery =====================
-function GalleryView({ run, onRegenerate }) {
+function GalleryView({ run, onRegenerate, onRegenerateOne }) {
   const [lightboxIdx, setLightboxIdx] = useState(null);
 
   if (!run || !run.creatives?.length) {
@@ -503,7 +520,7 @@ function GalleryView({ run, onRegenerate }) {
           creatives={withImages}
           initialIndex={lightboxIdx}
           onClose={() => setLightboxIdx(null)}
-          onRegenerate={onRegenerate}
+          onRegenerateOne={onRegenerateOne}
         />
       )}
     </div>
@@ -511,7 +528,7 @@ function GalleryView({ run, onRegenerate }) {
 }
 
 // ===================== Lightbox =====================
-function CreativeLightbox({ creatives, initialIndex, onClose, onRegenerate }) {
+function CreativeLightbox({ creatives, initialIndex, onClose, onRegenerateOne }) {
   const [idx, setIdx] = useState(initialIndex);
   const c = creatives[idx];
 
@@ -616,8 +633,9 @@ function CreativeLightbox({ creatives, initialIndex, onClose, onRegenerate }) {
             Download
           </a>
           <button
-            onClick={() => { onClose(); onRegenerate(); }}
+            onClick={() => { onClose(); onRegenerateOne(c.id); }}
             className="flex-1 flex items-center justify-center gap-2 h-10 bg-[var(--red)] text-white hover:bg-black transition-colors label-mono"
+            data-testid="lightbox-regenerate-button"
           >
             <RefreshCw size={13} strokeWidth={1.5} />
             Regenerate

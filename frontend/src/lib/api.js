@@ -41,6 +41,10 @@ export const api = {
       headers: authHeaders(),
       timeout: 240000,
     }),
+  regenerateOne: (runId, creativeId) =>
+    axios.post(`${API}/runs/${runId}/creatives/${creativeId}/regenerate`, null, {
+      headers: authHeaders(),
+    }),
   listRuns: (id) => axios.get(`${API}/brands/${id}/runs`),
   downloadZipUrl: (id) => `${API}/brands/${id}/download`,
 

@@ -918,6 +918,63 @@ async def generate_creatives(
     return run
 
 
+@api_router.post("/runs/{run_id}/creatives/{creative_id}/regenerate", response_model=AdRun)
+async def regenerate_single_creative(
+    run_id: str,
+    creative_id: str,
+    x_anthropic_key: Optional[str] = Header(None),
+    x_openai_key: Optional[str] = Header(None),
+):
+    """Re-renders ONE creative inside an existing run.
+
+    Pulls the existing prompt + aspect for that creative and re-calls OpenAI
+    images/edits with the brand's uploaded product image. Clears the existing
+    image_url + error so the frontend tile shows 'rendering…' until done.
+    """
+    o_key = _require_openai_key(x_openai_key)
+    _ = x_anthropic_key  # accepted for symmetry; not needed for image-only redo
+
+    run_doc = await db.ad_runs.find_one({"id": run_id}, {"_id": 0})
+    if not run_doc:
+        raise HTTPException(status_code=404, detail="Run not found")
+    run = AdRun(**run_doc)
+
+    creative = next((c for c in run.creatives if c.id == creative_id), None)
+    if not creative:
+        raise HTTPException(status_code=404, detail="Creative not found in this run")
+
+    brand_doc = await db.brands.find_one({"id": run.brand_id}, {"_id": 0})
+    if not brand_doc:
+        raise HTTPException(status_code=404, detail="Brand not found")
+    brand = Brand(**brand_doc)
+
+    settings_doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
+    settings = Settings(**settings_doc) if settings_doc else Settings()
+    oai_quality = QUALITY_TO_OAI.get(settings.quality, "medium")
+
+    brand_modifier = ""
+    if brand.identity and brand.identity.image_generation_modifier:
+        brand_modifier = brand.identity.image_generation_modifier
+
+    # Clear existing image/error so UI shows 'rendering…' on this tile only
+    await db.ad_runs.update_one(
+        {"id": run_id, "creatives.id": creative_id},
+        {"$set": {
+            "creatives.$.image_url": None,
+            "creatives.$.error": None,
+        }},
+    )
+
+    asyncio.create_task(
+        _generate_images_background(
+            run_id, [creative], o_key, oai_quality, brand.product_images or None, brand_modifier
+        )
+    )
+
+    fresh = await db.ad_runs.find_one({"id": run_id}, {"_id": 0})
+    return AdRun(**fresh)
+
+
 async def _full_pipeline_background(
     run_id: str,
     brand: "Brand",
