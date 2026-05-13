@@ -972,6 +972,20 @@ async def brand_research(brand_id: str, x_anthropic_key: Optional[str] = Header(
     else:
         logger.info("No logo found for %s", brand.name)
 
+    # GLOBAL RULE — uploaded products are the only source of truth.
+    # If the user has uploaded product images, run Claude Vision FIRST so the
+    # product_details block in the Brand DNA is grounded in the actual photos
+    # (not Claude's imagination from website copy). If no images, we tell Claude
+    # to leave product_details empty rather than fabricate.
+    has_uploaded_products = bool(brand.product_images)
+    product_vision_summary = ""
+    if has_uploaded_products:
+        logger.info("Vision analysis on %d uploaded product image(s) for %s",
+                    len(brand.product_images), brand.name)
+        product_vision_summary = await _claude_vision_analyze(api_key, brand.product_images)
+        if product_vision_summary:
+            logger.info("Vision summary: %s", product_vision_summary[:120])
+
     system = (
         "You are a senior brand strategist + visual designer doing DEEP brand reverse-engineering. "
         "You will receive a website excerpt that includes CONCRETE CSS EVIDENCE: actual font-family "
@@ -985,7 +999,25 @@ async def brand_research(brand_id: str, x_anthropic_key: Optional[str] = Header(
         "    NEUTRAL as the dominant near-white/near-black/cream. "
         "  • For fonts: pick the display/heading family used in hero/banner, then the body family. "
         "  • Strip generic fallbacks like 'sans-serif', '-apple-system', 'system-ui' when reporting. "
+        "  • PRODUCT GROUNDING (global rule, no exceptions): the 'product_details' block must reflect "
+        "    ONLY the actual product(s) the user has uploaded. If a UPLOADED_PRODUCT_VISION block is "
+        "    provided in the user message, ground every product_details field strictly in that block — "
+        "    do NOT invent SKUs, flavors, variants, ingredients, materials, or packaging that aren't "
+        "    visible in the uploaded photos. If NO UPLOADED_PRODUCT_VISION block is provided, set "
+        "    EVERY product_details field to empty string \"\" — do NOT fabricate product appearance from "
+        "    the website copy. Same rule applies to product_name and any product references inside "
+        "    brand_overview / ad_creative_style — never invent. "
         "Always reply with a single valid JSON object — no prose, no markdown."
+    )
+
+    product_vision_block = (
+        f"\n\nUPLOADED_PRODUCT_VISION (the user has uploaded the actual product photos — ground every "
+        f"product_details field strictly in this description, do not invent variants):\n\"\"\"\n"
+        f"{product_vision_summary}\n\"\"\""
+        if product_vision_summary
+        else "\n\nNO UPLOADED_PRODUCT_VISION PROVIDED — leave EVERY product_details field as empty "
+             "string \"\". Do not fabricate product appearance, packaging, or features from the "
+             "website copy."
     )
     user = f"""Analyze this website and extract the full brand DNA for "{brand.name}".
 
@@ -1044,7 +1076,7 @@ Output ONLY this JSON shape (use empty strings or arrays if a field is genuinely
 Website excerpt:
 \"\"\"
 {site}
-\"\"\""""
+\"\"\"{product_vision_block}"""
     raw = await _claude_call(api_key, system, user, max_tokens=3500)
     try:
         identity = BrandIdentity(**_extract_json(raw))
@@ -1089,6 +1121,18 @@ async def generate_creatives(
     brand = Brand(**doc)
     if not brand.identity:
         raise HTTPException(status_code=400, detail="Run brand research first")
+    # GLOBAL RULE — uploaded products are the only source of truth.
+    # Block generation outright when no product image is attached so we never
+    # fall through to text-to-image (which would synthesize a fake product).
+    if not brand.product_images:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No product image attached. Upload at least one product photo before generating "
+                "creatives — this app only composites the user's actual product, it never invents "
+                "or synthesizes products."
+            ),
+        )
 
     settings_doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
     settings = Settings(**settings_doc) if settings_doc else Settings()
@@ -1134,6 +1178,16 @@ async def regenerate_single_creative(
     if not brand_doc:
         raise HTTPException(status_code=404, detail="Brand not found")
     brand = Brand(**brand_doc)
+    # GLOBAL RULE — uploaded products are the only source of truth.
+    if not brand.product_images:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No product image attached. Upload at least one product photo before regenerating — "
+                "this app only composites the user's actual product, it never invents or synthesizes "
+                "products."
+            ),
+        )
 
     settings_doc = await db.settings.find_one({"id": "defaults"}, {"_id": 0})
     settings = Settings(**settings_doc) if settings_doc else Settings()
@@ -1300,6 +1354,11 @@ async def _build_prompts(
                 "  • Describe scene + staging + lighting + composition + mood around 'the product'. "
                 "  • NEVER describe the product's appearance (shape, colors, label, packaging, materials, "
                 "    ingredients, typography). Treat the product as an opaque fixed object. "
+                "  • NEVER invent, synthesize, or substitute a different product. The uploaded image IS "
+                "    the only product. Do not mention alternate SKUs, additional flavors, variants, "
+                "    a 'similar product', 'a product like this', or any other product object the user "
+                "    did not upload. When a scaffold asks for multiple units (tower, bundle, cart), all "
+                "    units MUST be identical pixel-faithful copies of the uploaded reference. "
                 "  • NEVER use words that imply altering the product: 'redesign', 'restyle', 'recolor', "
                 "    'rebrand', 'redrawn', 'new packaging', 'variant', 'reimagined', 'stylised version'. "
                 "  • COPY IS MANDATORY when the scaffold names it. Most scaffolds explicitly require "

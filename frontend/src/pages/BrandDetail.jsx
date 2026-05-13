@@ -196,9 +196,29 @@ export default function BrandDetail({ onOpenKeys }) {
                   className="h-10 px-3 border border-soft hover:border-ink focus:border-[var(--red)] focus:outline-none text-sm font-mono-tech w-40 hidden md:block"
                   data-testid="angle-input"
                 />
-                <button onClick={() => onGenerate()} disabled={generating} className="flex items-center gap-2 px-4 h-10 bg-[var(--red)] hover:bg-black text-white text-sm font-medium disabled:opacity-40 transition-colors" data-testid="generate-button">
-                  {generating ? <span>Running<span className="ascii-loader" /></span> : <><Sparkles size={14} strokeWidth={1.75} /> Run pipeline</>}
-                </button>
+                {(() => {
+                  const noProducts = !brand.product_images || brand.product_images.length === 0;
+                  const title = noProducts
+                    ? "Upload at least one product photo first — this app only composites real products, never invents them."
+                    : "";
+                  return (
+                    <button
+                      onClick={() => {
+                        if (noProducts) {
+                          toast.error("Upload a product photo first — the app only composites real products.");
+                          return;
+                        }
+                        onGenerate();
+                      }}
+                      disabled={generating}
+                      title={title}
+                      className="flex items-center gap-2 px-4 h-10 bg-[var(--red)] hover:bg-black text-white text-sm font-medium disabled:opacity-40 transition-colors"
+                      data-testid="generate-button"
+                    >
+                      {generating ? <span>Running<span className="ascii-loader" /></span> : <><Sparkles size={14} strokeWidth={1.75} /> Run pipeline</>}
+                    </button>
+                  );
+                })()}
               </>
             )}
             <a
