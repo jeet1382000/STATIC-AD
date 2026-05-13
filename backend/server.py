@@ -510,6 +510,32 @@ async def _claude_call(api_key: str, system: str, user: str, max_tokens: int = 1
     return await asyncio.to_thread(_run)
 
 
+# Words that, if they slip into a prompt anywhere near the product, give
+# gpt-image-2 license to redraw / restyle / substitute the product. We strip
+# these defensively at the wire level — bookending the preservation rule plus
+# this blacklist gives defense-in-depth.
+_PRODUCT_MODIFYING_VERBS = re.compile(
+    r"\b(redesign(?:ed)?|restyl(?:e|ed)|recolou?r(?:ed)?|rebrand(?:ed)?|reimagin(?:e|ed)|"
+    r"reinterpret(?:ed)?|stylis(?:e|ed)|stylized|reskin(?:ned)?|repackag(?:e|ed)|relabel(?:ed)?|"
+    r"new\s+(?:packaging|design|label|version|variant)|alternate\s+SKU|"
+    r"different\s+(?:SKU|flavou?r|colou?r|variant)|mock\s*-?\s*up\s+(?:of\s+)?(?:the\s+)?product|"
+    r"substitut(?:e|ed)\s+(?:the\s+)?product|swap\s+(?:the\s+)?product|"
+    r"replac(?:e|ed)\s+(?:the\s+)?product|generate\s+a\s+new\s+(?:product|bottle|tube|jar))\b",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_prompt_product_safe(prompt: str) -> str:
+    """Strip product-modifying verbs from Claude's prompt before sending to OpenAI.
+
+    Defense-in-depth: even if Claude slips and writes 'a freshly redesigned bottle',
+    we replace the offending verb so the image model doesn't get license to actually
+    redraw the product label / shape / colors.
+    """
+    return _PRODUCT_MODIFYING_VERBS.sub("", prompt)
+
+
+
 async def _scrape_logo(brand_url: str) -> tuple[Optional[str], Optional[str]]:
     """Try to discover and download the brand's logo from its homepage.
 
@@ -681,53 +707,82 @@ async def _openai_edit(
     # GLOBAL GUARDRAILS — applied to every /images/edits call regardless of template.
     if logo_attached:
         preservation_prefix = (
+            "ABSOLUTE PRODUCT PRESERVATION RULE (highest priority — overrides every other instruction): "
             "TWO REFERENCE IMAGES are provided. "
-            "IMAGE #1 = THE PRODUCT (STRICT PIXEL-FAITHFUL PRESERVATION, highest priority): "
-            "Reproduce the product PIXEL-FAITHFUL — keep its exact shape, silhouette, proportions, colors, "
-            "materials, label, typography, packaging, on-product logos, on-product text, finish, and "
-            "orientation completely unchanged. Do NOT redraw, restyle, redesign, recolor, relabel, replace, "
-            "regenerate, or reinterpret the product. Treat the product as a fixed photographic element. "
-            "IMAGE #2 = THE OFFICIAL BRAND LOGO / WORDMARK: "
-            "Wherever the scene description below asks for a brand wordmark, brand logo, brand pill, "
-            "brand mark, masthead logo, sticker, or any reference to '[BRAND NAME]' as a graphic element, "
-            "you MUST composite IMAGE #2 faithfully — keep its exact letterforms, colors, and proportions. "
-            "Do NOT invent a substitute wordmark, do not approximate the lettering, do not transcribe the "
-            "brand name in a different typeface. Resize and place the logo per the prompt's spec, but the "
-            "logo artwork itself is fixed. Add a subtle white or brand-neutral background pill behind the "
-            "logo only if the prompt explicitly asks for it. "
+            "IMAGE #1 = THE PRODUCT. This input image IS the final product. You MUST output the product "
+            "PIXEL-IDENTICAL to image #1 — same shape, silhouette, proportions, colors, materials, label, "
+            "label typography, on-product text, on-product logos, packaging, finish, orientation, and "
+            "every visual detail. The product is FIXED PHOTOGRAPHIC PIXELS, not a description to be "
+            "reinterpreted. FORBIDDEN: do not redraw, restyle, redesign, recolor, relabel, repackage, "
+            "regenerate, reinterpret, mock-up, substitute, swap, replace, or create a 'similar' or "
+            "'alternate' version of the product. FORBIDDEN: do not add, remove, or modify any product "
+            "feature, ingredient list, accessory, decoration, variant marker, or SKU label. FORBIDDEN: "
+            "do not 'improve' the product or harmonize it with the scene. Treat the product as if you "
+            "are compositing a physical photograph onto a new background — the pixels of the product "
+            "may shift in position and scale but never in appearance. If a scaffold asks for multiple "
+            "units (a tower, bundle, cart, flat-lay), every visible copy of the product MUST be a "
+            "PIXEL-IDENTICAL duplicate of image #1 — no flavour variants, no SKU differences, no "
+            "color variants. "
+            "IMAGE #2 = THE OFFICIAL BRAND LOGO / WORDMARK. Wherever the scene description below asks "
+            "for a brand wordmark, brand logo, brand pill, brand mark, masthead sticker, or any "
+            "reference to the brand name as a graphic element, you MUST composite IMAGE #2 faithfully "
+            "— keep its exact letterforms, colors, and proportions. Do NOT invent a substitute "
+            "wordmark, do not approximate the lettering, do not transcribe the brand name in a "
+            "different typeface. Resize and place the logo per the prompt's spec, but the logo "
+            "artwork itself is fixed. "
             "SCOPE LOCK: Render exactly the scene described below — including ALL HEADLINES, BODY COPY, "
-            "BADGES, CALLOUTS, CTAs, AND OTHER TYPOGRAPHY the prompt specifies. Render every text string "
-            "the prompt names in quotation marks, faithfully and legibly, using the type weights/sizes/"
-            "colors the prompt calls for. Do NOT add any EXTRA people, animals, text, watermarks, "
-            "UI chrome, browser/website elements, or decorative additions that the prompt does not "
-            "explicitly request. (Note: 'no extra text' means do not invent additional words beyond what "
-            "the prompt specifies — it does NOT mean omit the headlines/copy the prompt asks for, and "
-            "it does NOT mean omit the brand logo from image #2.) "
+            "BADGES, CALLOUTS, CTAs, AND OTHER TYPOGRAPHY the prompt specifies. Render every text "
+            "string the prompt names in quotation marks, faithfully and legibly. Do NOT add EXTRA "
+            "people, animals, text, watermarks, UI chrome, browser/website elements, or decorative "
+            "additions beyond what the prompt explicitly requests. (Note: 'no extra text' means do not "
+            "invent additional words beyond what the prompt specifies — it does NOT mean omit the "
+            "headlines/copy the prompt asks for, and it does NOT mean omit the brand logo.) "
             "CLEAN OUTPUT: no website navigation bars, no browser headers, no UI chrome, no dark "
             "header bands from the reference images. "
             "SCENE TO COMPOSITE THE PRODUCT AND LOGO INTO: "
         )
+        preservation_suffix = (
+            " — END OF SCENE. "
+            "REMINDER (absolute, non-negotiable): the product in image #1 must appear in the output "
+            "PIXEL-IDENTICAL to its input. Do not modify, restyle, recolor, relabel, redesign, "
+            "regenerate, or substitute the product in any way. The brand logo in image #2 is the "
+            "ONLY wordmark allowed for the brand — do not typeset the brand name as ordinary text."
+        )
     else:
         preservation_prefix = (
-            "STRICT PRODUCT PRESERVATION (highest priority, overrides any conflicting instruction below): "
-            "The input reference image IS the product. Reproduce the product PIXEL-FAITHFUL — keep its "
-            "exact shape, silhouette, proportions, colors, materials, label, typography, packaging, "
-            "logos, text, finish, and orientation completely unchanged. Do NOT redraw, restyle, "
-            "redesign, recolor, relabel, replace, regenerate, or reinterpret the product. Do NOT add "
-            "or remove product features, ingredients, accessories, or variants. Treat the product as "
-            "a fixed photographic element to be composited as-is into the new scene. "
+            "ABSOLUTE PRODUCT PRESERVATION RULE (highest priority — overrides every other instruction): "
+            "The input reference image IS the final product. You MUST output the product PIXEL-IDENTICAL "
+            "to the reference — same shape, silhouette, proportions, colors, materials, label, label "
+            "typography, on-product text, on-product logos, packaging, finish, orientation, and every "
+            "visual detail. The product is FIXED PHOTOGRAPHIC PIXELS, not a description to be "
+            "reinterpreted. FORBIDDEN: do not redraw, restyle, redesign, recolor, relabel, repackage, "
+            "regenerate, reinterpret, mock-up, substitute, swap, replace, or create a 'similar' or "
+            "'alternate' version of the product. FORBIDDEN: do not add, remove, or modify any product "
+            "feature, ingredient list, accessory, decoration, variant marker, or SKU label. FORBIDDEN: "
+            "do not 'improve' the product or harmonize it with the scene. Treat the product as if you "
+            "are compositing a physical photograph onto a new background — pixels may shift in position "
+            "and scale, never in appearance. Multi-unit scaffolds: every visible product copy MUST be a "
+            "PIXEL-IDENTICAL duplicate of the reference — no flavour variants, no SKU differences. "
             "SCOPE LOCK: Render exactly the scene described below — including ALL HEADLINES, BODY COPY, "
-            "BADGES, CALLOUTS, CTAs, AND OTHER TYPOGRAPHY the prompt specifies. Render every text string "
-            "the prompt names in quotation marks, faithfully and legibly, using the type weights/sizes/"
-            "colors the prompt calls for. Do NOT add any EXTRA people, animals, text, logos, watermarks, "
-            "UI chrome, browser/website elements, or decorative additions that the prompt does not "
-            "explicitly request. (Note: 'no extra text' means do not invent additional words beyond what "
-            "the prompt specifies — it does NOT mean omit the headlines/copy the prompt asks for.) "
+            "BADGES, CALLOUTS, CTAs, AND OTHER TYPOGRAPHY the prompt specifies. Render every text "
+            "string the prompt names in quotation marks, faithfully and legibly. Do NOT add EXTRA "
+            "people, animals, text, logos, watermarks, UI chrome, browser/website elements, or "
+            "decorative additions beyond what the prompt explicitly requests. (Note: 'no extra text' "
+            "means do not invent additional words beyond what the prompt specifies — it does NOT mean "
+            "omit the headlines/copy the prompt asks for.) "
             "CLEAN OUTPUT: no website navigation bars, no browser headers, no UI chrome, no dark "
             "header bands from the reference image. "
             "SCENE TO COMPOSITE THE PRODUCT INTO: "
         )
-    clean_prompt = preservation_prefix + prompt
+        preservation_suffix = (
+            " — END OF SCENE. "
+            "REMINDER (absolute, non-negotiable): the product in the reference image must appear in the "
+            "output PIXEL-IDENTICAL to its input. Do not modify, restyle, recolor, relabel, redesign, "
+            "regenerate, or substitute the product in any way."
+        )
+    # Sanitize Claude's prompt to remove any product-modifying language that slipped through.
+    safe_prompt = _sanitize_prompt_product_safe(prompt)
+    clean_prompt = preservation_prefix + safe_prompt + preservation_suffix
     data = {
         "model": OPENAI_IMAGE_MODEL,
         "prompt": clean_prompt,
@@ -1070,7 +1125,7 @@ Output ONLY this JSON shape (use empty strings or arrays if a field is genuinely
     "ugc_usage": "how UGC is used (if at all)",
     "offer_presentation": "how offers/discounts are presented"
   }},
-  "image_generation_modifier": "A single paragraph (~80 words) that will be PREPENDED to every ad-image prompt. Capture lighting, color grading, exact palette hexes, type style, mood, signature props. Concrete, sensory, image-gen ready — name the colors and the lighting setup explicitly."
+  "image_generation_modifier": "A single paragraph (~80 words) that will be PREPENDED to every ad-image prompt. Capture lighting, color grading, exact palette hexes, type style, mood, signature props. Concrete, sensory, image-gen ready — name the colors and the lighting setup explicitly. ABSOLUTE RULE: this paragraph MUST NEVER describe the product itself (no mention of bottles, tubes, jars, packaging, label, ingredients, product colors, product shape, product materials, product variants). Describe only the BRAND-STYLE around the product — the scene, light, palette, type, mood. The actual product image is composited by the system at render time and must not be described in words."
 }}
 
 Website excerpt:
