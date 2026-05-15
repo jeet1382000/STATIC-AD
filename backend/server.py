@@ -496,18 +496,57 @@ def _extract_json(text: str) -> dict:
 
 
 async def _claude_call(api_key: str, system: str, user: str, max_tokens: int = 1500) -> str:
-    """Call Claude via the SDK in a thread (sync client — fewer deps)."""
-    def _run():
-        c = anthropic.Anthropic(api_key=api_key)
-        msg = c.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        return msg.content[0].text
+    """Call Claude via the SDK in a thread (sync client — fewer deps).
 
-    return await asyncio.to_thread(_run)
+    Retries on transient Anthropic errors:
+      • 529 Overloaded (their servers are full)
+      • 503 / 502 (gateway hiccups)
+      • RateLimitError (we exceeded our throughput briefly)
+    Up to 4 attempts with exponential backoff (2s, 4s, 8s).
+    """
+    last_exc: Exception | None = None
+    for attempt in range(4):
+        try:
+            def _run():
+                c = anthropic.Anthropic(api_key=api_key)
+                msg = c.messages.create(
+                    model=CLAUDE_MODEL,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=[{"role": "user", "content": user}],
+                )
+                return msg.content[0].text
+            return await asyncio.to_thread(_run)
+        except anthropic.APIStatusError as e:
+            last_exc = e
+            status = getattr(e, "status_code", None)
+            # Retry on overloaded / gateway errors only
+            if status in (502, 503, 529) and attempt < 3:
+                delay = 2 * (2 ** attempt)
+                logger.warning("Claude %s on attempt %d/4 — retrying in %ds", status, attempt + 1, delay)
+                await asyncio.sleep(delay)
+                continue
+            raise
+        except anthropic.RateLimitError as e:
+            last_exc = e
+            if attempt < 3:
+                delay = 2 * (2 ** attempt)
+                logger.warning("Claude rate-limit on attempt %d/4 — retrying in %ds", attempt + 1, delay)
+                await asyncio.sleep(delay)
+                continue
+            raise
+        except anthropic.APIConnectionError as e:
+            last_exc = e
+            if attempt < 3:
+                delay = 2 * (2 ** attempt)
+                logger.warning("Claude connection error on attempt %d/4 — retrying in %ds: %s",
+                               attempt + 1, delay, str(e)[:80])
+                await asyncio.sleep(delay)
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Claude call failed for unknown reason")
 
 
 # Words that, if they slip into a prompt anywhere near the product, give
@@ -1563,9 +1602,20 @@ async def _full_pipeline_background(
 
     except Exception as e:
         logger.error("Run %s: pipeline error: %s", run_id, e, exc_info=True)
+        # Friendly message for known Anthropic transient errors
+        raw = str(e)
+        if "overloaded_error" in raw or "529" in raw:
+            err_msg = (
+                "Anthropic is overloaded right now (529). This is a temporary issue on their side — "
+                "wait ~30s and click Run pipeline again."
+            )
+        elif "rate_limit" in raw.lower() or "429" in raw:
+            err_msg = "Hit Anthropic's rate limit. Wait a moment and try again."
+        else:
+            err_msg = raw[:300]
         await db.ad_runs.update_one(
             {"id": run_id},
-            {"$set": {"status": "failed", "error": str(e)[:300]}},
+            {"$set": {"status": "failed", "error": err_msg}},
         )
 
 
