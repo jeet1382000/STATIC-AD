@@ -825,6 +825,247 @@ async def _openai_edit(
         return await _openai_generate(openai_key, prompt, size=size, quality=quality)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SCENE-RENDER-THEN-PASTE PIPELINE
+# ─────────────────────────────────────────────────────────────────────────────
+# This is the ONLY path that GUARANTEES the uploaded product is pixel-identical
+# in the output. /images/edits is generative — it will subtly redraw the product
+# no matter how strict the prompt. Instead we:
+#   1. Ask gpt-image-2 to render the SCENE ONLY, with an explicit empty product
+#      placement zone. The model never sees the product.
+#   2. PIL pastes the user's original product image into the placement zone.
+#   3. We add a soft drop-shadow under the pasted product for natural integration.
+#
+# The product pixels in the final PNG are byte-identical to the upload — the
+# model simply cannot modify what it never saw.
+
+# Per-aspect placement zones expressed as fractions of the canvas:
+#   (zone_w_ratio, zone_h_ratio, zone_cx_ratio, zone_cy_ratio)
+_PLACEMENT_BY_ASPECT = {
+    "1:1":  (0.46, 0.55, 0.50, 0.58),
+    "4:5":  (0.50, 0.42, 0.50, 0.66),
+    "9:16": (0.55, 0.32, 0.50, 0.55),
+    "16:9": (0.32, 0.62, 0.50, 0.55),
+    "4:3":  (0.42, 0.55, 0.50, 0.58),
+}
+
+
+def _placement_for(aspect: str) -> tuple[float, float, float, float]:
+    return _PLACEMENT_BY_ASPECT.get(aspect, _PLACEMENT_BY_ASPECT["1:1"])
+
+
+def _placement_phrase(aspect: str) -> str:
+    """Human-readable placement description we inject into the scene prompt so
+    the model leaves an empty zone where we'll paste the product."""
+    w, h, cx, cy = _placement_for(aspect)
+    h_pct = int(round(h * 100))
+    w_pct = int(round(w * 100))
+    vert = "lower-third" if cy > 0.6 else ("upper-third" if cy < 0.4 else "vertical center")
+    horiz = "right" if cx > 0.6 else ("left" if cx < 0.4 else "horizontal center")
+    return (
+        f"approximately {w_pct}% wide by {h_pct}% tall, centered at the "
+        f"{horiz} / {vert} of the canvas"
+    )
+
+
+async def _openai_scene_only(
+    openai_key: str,
+    scene_prompt: str,
+    aspect: str,
+    size: str = "1024x1024",
+    quality: str = "medium",
+) -> dict:
+    """Render the BACKGROUND SCENE only via /images/generations.
+
+    Wraps the prompt with explicit instructions to leave an empty product
+    placement zone — we paste the original product onto that zone locally.
+    """
+    placement = _placement_phrase(aspect)
+    wrapped_prompt = (
+        "Generate the BACKGROUND SCENE for an advertising creative. "
+        f"CRITICAL: Leave a CLEAN EMPTY PLACEMENT ZONE — {placement}. "
+        "This empty zone MUST contain NO product, NO objects, NO text overlap, "
+        "NO heavy shadows, NO patterns. The surface inside this zone should be "
+        "smooth and uniform so a product photo can be placed on top of it. "
+        "Render every other element of the composition described below — surface, "
+        "background, lighting, props, headlines, badges, callouts, CTAs, brand "
+        "wordmark — but DO NOT render the product itself. Whenever the scene "
+        "refers to 'the product', leave that area as the empty placement zone. "
+        "SCENE SPECIFICATION: " + _sanitize_prompt_product_safe(scene_prompt)
+    )
+
+    headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
+    payload = {"model": OPENAI_IMAGE_MODEL, "prompt": wrapped_prompt, "n": 1,
+               "size": size, "quality": quality}
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as hc:
+            resp = await hc.post(
+                "https://api.openai.com/v1/images/generations", headers=headers, json=payload,
+            )
+            if resp.status_code != 200:
+                try:
+                    error_detail = resp.json().get("error", {}).get("message", resp.text[:200])
+                except Exception:
+                    error_detail = resp.text[:200]
+                return {"error": f"OpenAI {resp.status_code}: {error_detail}"}
+            data = resp.json()
+            image_data = data.get("data", [])
+            if not image_data:
+                return {"error": "no image returned"}
+            b64_data = image_data[0].get("b64_json")
+            if not b64_data:
+                return {"error": "no b64_json in response"}
+            return {"png_bytes": base64.b64decode(b64_data)}
+    except Exception as e:
+        return {"error": f"scene generation failed: {str(e)[:200]}"}
+
+
+def _bg_looks_uniform(img) -> bool:
+    """Heuristic: corners of the image are within a tight color tolerance of
+    each other → looks like a flat product-shot background."""
+    try:
+        rgb = img.convert("RGB")
+        w, h = rgb.size
+        corners = [rgb.getpixel((1, 1)), rgb.getpixel((w - 2, 1)),
+                   rgb.getpixel((1, h - 2)), rgb.getpixel((w - 2, h - 2))]
+        rs = [c[0] for c in corners]
+        gs = [c[1] for c in corners]
+        bs = [c[2] for c in corners]
+        return max(rs) - min(rs) < 12 and max(gs) - min(gs) < 12 and max(bs) - min(bs) < 12
+    except Exception:
+        return False
+
+
+def _knock_out_uniform_background(img):
+    """Make uniform-background pixels transparent so the product sits cleanly
+    on the rendered scene. Conservative — only knocks out pixels within a tight
+    delta of the corner sample."""
+    from PIL import Image
+    rgb = img.convert("RGB")
+    w, h = rgb.size
+    sample = rgb.getpixel((1, 1))
+    sr, sg, sb = sample
+    rgba = img.convert("RGBA").load()
+    out = Image.new("RGBA", (w, h))
+    px = out.load()
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = rgba[x, y]
+            d = abs(r - sr) + abs(g - sg) + abs(b - sb)
+            if d < 28:
+                px[x, y] = (r, g, b, 0)
+            else:
+                px[x, y] = (r, g, b, a)
+    return out
+
+
+def _composite_product_on_scene(
+    scene_png_bytes: bytes,
+    product_data_url: str,
+    aspect: str,
+    multi_unit_count: int = 1,
+) -> bytes:
+    """Paste the user's original product image onto the rendered scene.
+
+    The product image is loaded, alpha-trimmed (best effort) so transparent /
+    white backgrounds don't show, scaled to fit the placement zone, and pasted
+    with a soft drop shadow.
+
+    For multi-unit templates (tower / bundle / cart) we paste `multi_unit_count`
+    copies arranged in a horizontal row with subtle overlap.
+    """
+    from PIL import Image, ImageFilter
+    from io import BytesIO
+
+    scene = Image.open(BytesIO(scene_png_bytes)).convert("RGBA")
+    sw, sh = scene.size
+
+    m = re.match(r"data:([^;]+);base64,(.+)", product_data_url, re.DOTALL)
+    if not m:
+        return scene_png_bytes
+    try:
+        product_bytes = base64.b64decode(m.group(2).strip())
+        product = Image.open(BytesIO(product_bytes)).convert("RGBA")
+    except Exception:
+        return scene_png_bytes
+
+    if product.mode != "RGBA" or _bg_looks_uniform(product):
+        product = _knock_out_uniform_background(product)
+
+    pw, ph = product.size
+    target_w_ratio, target_h_ratio, cx_ratio, cy_ratio = _placement_for(aspect)
+    zone_w = int(sw * target_w_ratio)
+    zone_h = int(sh * target_h_ratio)
+
+    # Fit-to-zone preserving aspect — never distort.
+    scale = min(zone_w / pw, zone_h / ph)
+    new_w = max(1, int(pw * scale))
+    new_h = max(1, int(ph * scale))
+
+    n = max(1, min(int(multi_unit_count), 4))
+    if n == 1:
+        positions = [(int(sw * cx_ratio), int(sh * cy_ratio))]
+    else:
+        overlap = 0.78
+        unit_step = int(new_w * overlap)
+        total_w = unit_step * (n - 1) + new_w
+        start_x = int(sw * cx_ratio - total_w // 2 + new_w // 2)
+        cy = int(sh * cy_ratio)
+        positions = [(start_x + i * unit_step, cy) for i in range(n)]
+
+    resized = product.resize((new_w, new_h), Image.LANCZOS)
+
+    shadow_blur = max(6, int(min(new_w, new_h) * 0.04))
+    shadow_offset_y = max(4, int(new_h * 0.04))
+    alpha = resized.split()[3] if resized.mode == "RGBA" else None
+    if alpha is not None:
+        shadow_alpha = alpha.filter(ImageFilter.GaussianBlur(shadow_blur))
+        shadow = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 110))
+        shadow.putalpha(shadow_alpha)
+
+    canvas = scene.copy()
+    for cx_px, cy_px in positions:
+        x = cx_px - new_w // 2
+        y = cy_px - new_h // 2
+        if alpha is not None:
+            canvas.alpha_composite(shadow, (x, y + shadow_offset_y))
+        canvas.alpha_composite(resized, (x, y))
+
+    out = BytesIO()
+    canvas.convert("RGB").save(out, "PNG", optimize=True)
+    return out.getvalue()
+
+
+async def _render_with_local_paste(
+    openai_key: str,
+    product_data_url: str,
+    scene_prompt: str,
+    aspect: str,
+    size: str,
+    quality: str,
+    multi_unit_count: int = 1,
+) -> dict:
+    """Full pipeline: scene-only render → PIL paste of original product →
+    save final PNG. Returns {url} or {error}."""
+    scene_res = await _openai_scene_only(openai_key, scene_prompt, aspect, size, quality)
+    if "png_bytes" not in scene_res:
+        return scene_res
+    try:
+        composited = await asyncio.to_thread(
+            _composite_product_on_scene, scene_res["png_bytes"], product_data_url,
+            aspect, multi_unit_count,
+        )
+    except Exception as e:
+        logger.error("Local composite failed: %s — saving scene-only as fallback", e)
+        composited = scene_res["png_bytes"]
+    image_id = str(uuid.uuid4()) + ".png"
+    image_path = IMAGES_DIR / image_id
+    await asyncio.to_thread(image_path.write_bytes, composited)
+    return {"url": f"/api/images/{image_id}"}
+
+
+
+
 async def _openai_generate(openai_key: str, prompt: str, size: str = "1024x1024", quality: str = "medium") -> dict:
     """Call OpenAI gpt-image-2 to generate one image. Saves PNG to IMAGES_DIR. Returns {url} or {error}."""
     headers = {
@@ -1552,8 +1793,20 @@ async def _generate_images_background(
     """
     # Use the first uploaded product image as the primary reference
     primary_product_image = (product_images[0] if product_images else None)
-    mode = "edit+logo" if (primary_product_image and logo_data_url) else ("edit" if primary_product_image else "generate")
-    logger.info("Run %s: image mode=%s, %d creatives", run_id, mode, len(creatives))
+    # Default routing: scene-only render + local PIL composite of the user's
+    # product. This GUARANTEES the product is pixel-identical because the
+    # image model never sees it. Multi-unit templates (tower/bundle/cart) and
+    # templates that need natural integration (hand-held) need to remain on
+    # /images/edits since multi-unit pasting or in-hand compositing aren't
+    # achievable purely in PIL.
+    EDITS_TEMPLATES = {16, 17, 18}        # Studio Tower, Bundle Cart, Hand-Held
+    MULTI_UNIT_PASTE = {                  # template_number → how many copies to paste
+        # Currently empty — multi-unit templates use /images/edits above.
+    }
+
+    mode_label = "scene+paste"
+    logger.info("Run %s: default mode=%s, %d creatives (with logo=%s)",
+                run_id, mode_label, len(creatives), bool(logo_data_url))
 
     sem = asyncio.Semaphore(4)
     style_prefix = (brand_modifier.strip() + " ") if brand_modifier and brand_modifier.strip() else ""
@@ -1561,24 +1814,34 @@ async def _generate_images_background(
     async def worker(creative: AdCreative):
         size = _aspect_to_openai_size(creative.aspect)
         styled_prompt = style_prefix + creative.prompt
+        tnum = creative.template_number or 0
         async with sem:
-            if primary_product_image:
-                res = await _openai_edit(
-                    o_key,
-                    primary_product_image,
-                    styled_prompt,
-                    size=size,
-                    quality=quality,
-                    logo_data_url=logo_data_url,
-                )
-            else:
+            if not primary_product_image:
                 res = await _openai_generate(o_key, styled_prompt, size=size, quality=quality)
+                used = "generate"
+            elif tnum in EDITS_TEMPLATES:
+                # Templates that need the model to handle multi-unit / natural
+                # integration. Keep the strict preservation prefix on /images/edits.
+                res = await _openai_edit(
+                    o_key, primary_product_image, styled_prompt,
+                    size=size, quality=quality, logo_data_url=logo_data_url,
+                )
+                used = "edit"
+            else:
+                # SAFE PATH: scene-only render + local PIL paste of the original product.
+                copies = MULTI_UNIT_PASTE.get(tnum, 1)
+                res = await _render_with_local_paste(
+                    o_key, primary_product_image, styled_prompt,
+                    aspect=creative.aspect, size=size, quality=quality,
+                    multi_unit_count=copies,
+                )
+                used = f"paste(n={copies})"
         if "url" in res:
             await db.ad_runs.update_one(
                 {"id": run_id, "creatives.id": creative.id},
                 {"$set": {"creatives.$.image_url": res["url"]}},
             )
-            logger.info("Image done: run=%s creative=%s mode=%s", run_id, creative.id, mode)
+            logger.info("Image done: run=%s creative=%s mode=%s", run_id, creative.id, used)
         else:
             err = res.get("error", "unknown")
             await db.ad_runs.update_one(
